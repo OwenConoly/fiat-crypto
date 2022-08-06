@@ -2998,9 +2998,45 @@ Global Instance show_flag_state : Show flag_state :=
   ++" SF="++show sfv
   ++" ZF="++show zfv
   ++" OF="++show ofv++")")%string.
+
+Print dag.t.
+Print node.
+Print expr.
+Print dag.lookup.
+Print bound_expr.
+
+Print reveal.
+
+Fixpoint bound_expr' e : option Z := (* e <= r *)
+  match e with
+  | ExprApp (const v, _) => if Z.leb 0 v then Some v else None
+  | ExprApp (add s, args) =>
+      Some  match Option.List.lift (List.map bound_expr' args) with
+            | Some bounds => Z.min (List.fold_right Z.add 0%Z bounds) (Z.ones (Z.of_N s))
+            | None => Z.ones (Z.of_N s)
+            end
+  | ExprApp (selectznz, [c;a;b]) =>
+      match bound_expr' a, bound_expr' b with
+      | Some a, Some b => Some (Z.max a b)
+      | _, _ => None
+      end
+  | ExprApp (set_slice 0 w, [a;b]) =>
+      match bound_expr' a, bound_expr' b with
+      | Some a, Some b => Some (Z.lor
+                                  (Z.land (Z.ones (Z.succ (Z.log2 b))) (Z.ones (Z.of_N w)))
+                                  (Z.ldiff (Z.ones (Z.succ (Z.log2 a))) (Z.ones (Z.of_N w))))
+      | _, _ => None
+      end
+  | ExprApp ((old s _ | slice _ s | mul s | shl s | shr s | sar s | neg s | and s | or s | xor s), _) => Some (Z.ones (Z.of_N s))
+  | ExprApp ((addcarry _ | subborrow _ | addoverflow _ | iszero), _) => Some 1
+  | _ => None
+  end%Z.
+
+
+
 Global Instance show_lines_dag : ShowLines dag := (fun d:dag =>
   ["(*dag*)["]
-    ++List.map (fun '(i, v, descr) =>"(*"++show i ++"*) " ++ show v++";"
+    ++List.map (fun '(i, v, descr) =>"(*"++show i ++"*) " ++ show v++";"++ show (bound_expr (reveal d 1000 i))
                                          ++ (if dag.get_eager_description_always_show descr
                                              then match dag.get_eager_description_description descr with
                                                   | Some descr => " " ++ String.Tab ++ "(*" ++ descr ++ "*)"
