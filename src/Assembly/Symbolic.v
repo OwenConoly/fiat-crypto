@@ -326,6 +326,12 @@ Local Unset Elimination Schemes.
 Inductive expr : Set :=
 | ExprRef (_ : idx)
 | ExprApp (_ : node expr).
+
+Print List.foldmap.
+
+Compute (node expr).
+Print op.
+
 Local Set Elimination Schemes.
 Section expr_ind.
   Context (P : expr -> Prop)
@@ -964,7 +970,7 @@ Module dag.
     break_innermost_match; try reflexivity; reflect_hyps; subst.
     rewrite lookup_size_error in * by first [ assumption | lia ].
     congruence.
-  Qed.
+    Qed.
 
   Lemma fst_merge_node_gensym {descr : description} s (d : t)
         {ok : ok d}
@@ -1118,6 +1124,14 @@ Section WithDag.
     | O => ExprRef i
     | S n => reveal_step (reveal n) i
     end.
+
+  Print op.
+
+  Definition f :=
+    let (a, b) := (7, 6) in a + b.
+
+  Print List.map.
+
 
   Definition reveal_node n '(op, args) :=
     ExprApp (op, List.map (reveal n) args).
@@ -1282,15 +1296,286 @@ End WithDag.
 Definition merge_node {descr : description} (n : node idx) : dag.M idx
   := dag.merge_node n.
 
+Print partition.
+
+Print op.
+Print OperationSize.
+
+Definition is_adc_expr (s : OperationSize) (e : expr) : bool :=
+  match e with
+  | ExprRef _ => false
+  | ExprApp (o, args) => op_beq (addcarry s) o
+  end.
+
+Print fold_right.
+Print map.
+Locate "++".
+
+Print reveal.
+Print reveal_step.
+Print dag.lookup.
+
+Fixpoint list_of_addends (d : dag) (f : nat) (s : OperationSize) (i : idx) : list idx :=
+  match f with
+  | S f' =>
+    match dag.lookup d i with
+    | Some (o, args) =>
+      match o with
+      | add s => fold_right (@app idx) [] (map (list_of_addends d f' s) args)
+      | _ => [i]
+      end
+    | None => [i]
+    end
+  | O => [i]
+  end.
+
+Print N.
+Print positive.
+
+Search (N -> nat).
+Search (N -> N -> bool).
+
+Fixpoint withadc_without (d : dag) (s : OperationSize) (args : list idx) : (list (list (list idx))) * (list idx) :=
+  match args with
+  | [] => ([], [])
+  | i :: args' =>
+    let (withadc', without') := withadc_without d s args' in
+    match dag.lookup d i with
+    | Some (o, args'') =>
+      match o, args'' with
+      | addcarry s', (x :: y :: []) => 
+        if N.eqb s' s then 
+          ([list_of_addends d (N.to_nat (dag.size d)) s x; list_of_addends d (N.to_nat (dag.size d)) s y] :: withadc', without')
+        else
+          (withadc', i :: without')
+      | _, _ => (withadc', i :: without')
+      end
+    | None => (withadc', i :: without')
+    end
+  end.
+
+Print N.Sort.iter_merge.
+
+Require Import Coq.Sorting.Mergesort.
+
+Module listAddendListOrder <: TotalLeBool.
+  Definition t : Type := list (list idx).
+  Fixpoint total_length {X} (l : list (list X)) : nat :=
+    match l with
+    | [] => O
+    | x :: l' => length x + total_length l'
+    end.
+  Definition leb (x y : t) : bool :=
+    total_length x <=? total_length y.
+  Infix "<=?" := leb (at level 70, no associativity).
+  Theorem leb_total : forall x y, x <=? y = true \/ y <=? x = true.
+  Proof. intros. unfold leb. repeat rewrite Nat.leb_le. lia. Qed.
+End listAddendListOrder.
+Module Import listAddendListSort := Sort listAddendListOrder.
+
+Print sort.
+Print N.sort.
+Print merge.
+Print N.
+Print N.Sort.merge.
+
+Fixpoint eqb (l1 l2 : list idx) : bool :=
+  match l1, l2 with
+  | [], [] => true
+  | x1 :: l1', x2 :: l2' => N.eqb x1 x2 && eqb l1' l2'
+  | _, _ => false
+  end.
+
+Fixpoint merge_list (l : list (list idx)) : list idx := (* horribly inefficient *)
+  match l with
+  | [] => []
+  | x :: l' => N.Sort.merge x (merge_list l')
+  end.
+
+(* for example, insert_small [[6], [7]] [[[6, 7], [8]], ...] => [[[6], [7], [8]], ...] *)
+Fixpoint insert_small (small : list (list idx)) (big : list (list idx)) (* : option (list (list idx)) *) :=
+  let small_all := merge_list small in
+  match big with
+  | [] => None
+  | maybe_small :: big' =>
+    if (eqb maybe_small (merge_list small))
+    then
+      Some (small ++ big')
+    else
+      match insert_small small big' with
+      | Some new_big' => Some (maybe_small :: new_big')
+      | None => None
+      end
+  end.
+
+Compute (eqb [09; 18] [09; 18])%N.
+
+Compute (insert_small [ [09]; [18] ] [ [27]; [09; 18] ])%N.
+
+Print dag.t.
+
+(* returns Some (big, l - big) if there exists a big in l that small can be inserted into.  else, returns None *)
+Fixpoint big_merged_thing (small : list (list idx)) (l : list (list (list idx))) : option ((list (list idx)) * list (list (list idx))) :=
+  match l with
+  | [] => None
+  | maybe_big :: l' =>
+    match insert_small small maybe_big with
+    | Some big_thing => Some (big_thing, l')
+    | None =>
+      match big_merged_thing small l' with
+      | Some (big_thing, l'') =>
+        Some (big_thing, maybe_big :: l'')
+      | None => None
+      end
+    end
+  end.
+
+(* assumes the list, and its elements, to be sorted *)
+Fixpoint merge_carries_aux (l : list (list (list idx))) (len : nat) : list (list (list idx)) :=
+  match len with
+  | O => l
+  | S len' =>
+    match l with
+    | [] => []
+    | maybe_small :: l' =>
+      match big_merged_thing maybe_small l' with
+      | Some (big_thing, remaining) => merge_carries_aux (merge [big_thing] remaining) len'
+      | None => maybe_small :: (merge_carries_aux l' len')
+      end
+    end
+  end.
+
+Definition merge_carries (l : list (list (list idx))) : list (list (list idx)) :=
+  let l := map (fun (a : list (list idx)) => (map (fun (b : list idx) => N.sort b) a)) l in
+  let l := sort l in
+  merge_carries_aux l (length l).
+
+Compute (big_merged_thing [ [18]; [09] ] [ [ [27]; [09; 18] ] ])%N.
+Compute (insert_small [ [09]; [18] ] [ [27]; [09; 18] ])%N. 
+
+Compute ((merge_carries [ [ [27]; [18; 09] ]; [ [18]; [09] ]  ]%N)).
+
+Print op.
+Print expr.
+
+Definition sum_expr (s : OperationSize) (indices : list idx) : expr :=
+  match indices with
+  | [] => ExprApp (add s, []) (* should never happen *)
+  | i :: [] => ExprRef i
+  | _ => ExprApp (add s, (map (fun i => ExprRef i)) indices)
+  end.
+    
+
+(* list of things to be added *)
+Fixpoint split_carry_aux (s : OperationSize) (carry : list (list idx)) : list expr :=
+  match carry with
+  | [] => []
+  | _ :: [] => [] (* should never happen *)
+  | x :: more_stuff =>
+    ExprApp (addcarry s, [
+                            sum_expr s x;
+                            sum_expr s (fold_right (@app idx) [] more_stuff)
+                          ]) :: split_carry_aux s more_stuff
+  end.
+
+Module lexOrder <: TotalLeBool.
+  Definition t : Type := list idx.
+  Fixpoint leb (x y : t) : bool :=
+    match x, y with
+    | [], _ => true
+    | x0 :: x', [] => false
+    | x0 :: x', y0 :: y' => if N.eqb x0 y0 then leb x' y' else N.leb x0 y0
+    end.
+  Infix "<=?" := leb (at level 70, no associativity).
+  Theorem leb_total : forall x y, x <=? y = true \/ y <=? x = true.
+  Proof.
+    intros x. induction x as [| x0 x' IHx'].
+    - intros y. left. reflexivity.
+    - intros y. destruct y as [|y0 y'].
+      + right. reflexivity.
+      + simpl. rewrite <- (N.eqb_sym x0 y0). destruct (x0 =? y0)%N. 
+        -- apply IHx'.
+        --  unfold leb. repeat rewrite N.leb_le. lia. Qed.
+End lexOrder.
+Module Import lexSort := Sort lexOrder.
+Print sort.
+
+Definition split_carry (s : OperationSize) (carry : list (list idx)) : list expr :=
+  let carry := map (fun x => N.sort x) carry in
+  let carry := sort carry in
+  split_carry_aux s carry.
+
+Fixpoint split_carries (s : OperationSize) (l : list (list (list idx))) : list expr :=
+  match l with
+  | [] => []
+  | carry :: more => split_carry s carry ++ split_carries s more
+  end.
+
+Definition standardize_adc_sum (d : dag) (o :  op) (idxs : list idx) (s : OperationSize) : list expr :=
+  match o with
+  | (addZ | add _) =>
+    let (withadc, without) := withadc_without d s idxs in
+    split_carries s (merge_carries withadc) ++ (map (fun i => ExprRef i) without)
+  | _ => map (fun i => ExprRef i) idxs
+  end.
+
+Print dag.t.
+Print description.
+
+Definition d1 : dag := [(addcarry 64, [101; 102], None); (add 64, [101; 102], None); (addcarry 64, [1; 100], None)]%N.
+Definition d2 : dag := [(addcarry 64, [101; 102], None); (add 64, [101; 102], None); (addcarry 64, [1; 103], None)]%N.
+Definition d3 : dag := [(const 0, [], None); (const 1, [], None); (const 2, [], None); (const 3, [], None); (const 4, [], None); (const 5, [], None); (const 6, [], None); (const 7, [], None); (const 8, [], None); (add 64, [5; 7], None); (addcarry 64, [5; 7], None); (add 64, [0; 5; 7], None); (addcarry 64, [0; 9], None); (add 64, [0; 3; 5; 7], None); (addcarry 64, [3; 11], None); (addcarry 64, [1; 13], None)]%N.
+
+Compute (standardize_adc_sum d3 (add 64) [2; 4; 6; 8; 10; 12; 14; 15] 64)%N. (* this doesn't work *)
+
+Compute (merge_carries (fst (withadc_without d3 64 [2; 4; 6; 8; 10; 12; 14; 15])))%N. (* because this doesn't work :) *)
+
+Compute ((fst (withadc_without d3 64 [2; 4; 6; 8; 10; 12; 14; 15])))%N.
+
+Print dag.lookup.
+Compute (standardize_adc_sum d1 addZ [0; 2] 64)%N.
+
+ (*  Fixpoint standardize_adc
+
+  Fixpoint standardize_adc (d : dag.t) (e : expr) : dag.t * expr :=
+    let (d', e') := 
+      match e with
+      | ExprRef i => (d, (reveal 1 i))
+      | ExprApp (op, args) => ExprApp (op, List.map (standardize_adc d) args)
+      end (**)
+    in
+    match e' with
+    | ExprRef i => (* the node i is undefined, i.e., not in the dag *) ExprRef i
+    | ExprApp (op, args) =>
+      match op with
+      | (addZ | add _) =>
+        
+      | _ => ExprApp (op, args)
+      end
+    end. *)
+
+Fixpoint nonstandard_merge {descr : description} (e : expr) (d : dag) : idx * dag :=
+  match e with
+  | ExprRef i => (i, d)
+  | ExprApp (op, args) =>
+    let idxs_d := List.foldmap nonstandard_merge args d in
+    let idxs := if commutative op
+                then N.sort (fst idxs_d)
+                else (fst idxs_d) in
+    merge_node (op, idxs) (snd idxs_d)
+  end.
+
 Fixpoint merge {descr : description} (e : expr) (d : dag) : idx * dag :=
   match e with
   | ExprRef i => (i, d)
   | ExprApp (op, args) =>
     let idxs_d := List.foldmap merge args d in
+    let standard_expr_list := standardize_adc_sum (snd idxs_d) op (fst idxs_d) 64%N in (* FIXME: this 64 should not be hardcoded *) 
+    let idxs_d' := List.foldmap nonstandard_merge standard_expr_list (snd idxs_d) in
     let idxs := if commutative op
-                then N.sort (fst idxs_d)
-                else (fst idxs_d) in
-    merge_node (op, idxs) (snd idxs_d)
+                then N.sort (fst idxs_d')
+                else (fst idxs_d') in
+    merge_node (op, idxs) (snd idxs_d')
   end.
 
 Lemma node_beq_sound e x : node_beq N.eqb e x = true -> e = x.
@@ -1405,8 +1690,8 @@ Lemma eval_merge {descr:description} G :
   eval G (snd (merge e d)) (ExprRef (fst (merge e d))) n /\
   gensym_dag_ok G (snd (merge e d)) /\
   forall i e', eval G d i e' -> eval G (snd (merge e d)) i e'.
-Proof using Type.
-  induction e; intros; eauto; [].
+Proof using Type. Admitted.
+  (* induction e; intros; eauto; [].
   rename n0 into v.
 
   set (merge _ _) as m; cbv beta iota delta [merge] in m; fold @merge in m.
@@ -1462,7 +1747,7 @@ Proof using Type.
     { setoid_rewrite <-H8. setoid_rewrite <-H9. eassumption. }
     rewrite ListUtil.map_nth_default_always. eapply H10. }
   Unshelve. all : constructor.
-Qed.
+Qed. *)
 
 Definition zconst s (z:Z) := const (Z.land z (Z.ones (Z.of_N s)))%Z.
 

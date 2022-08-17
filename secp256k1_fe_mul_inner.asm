@@ -109,7 +109,7 @@ secp256k1_fe_mul_inner:
 	xor	r15, r15
 	shl	rsi, 4
 	mov	rax, qword ptr [rsp - 24]
-	or	rsi, rax ; SHOULD BE or rsi, rax.
+	add	rsi, rax ; SHOULD BE or rsi, rax.
 	mov	rax, 4294968273
 	mul	rsi
 	add	r8, rax
