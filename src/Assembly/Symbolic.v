@@ -1321,7 +1321,7 @@ Fixpoint list_of_addends (d : dag) (f : nat) (s : OperationSize) (i : idx) : lis
     match dag.lookup d i with
     | Some (o, args) =>
       match o with
-      | add s => fold_right (@app idx) [] (map (list_of_addends d f' s) args)
+      | add s' => if N.eqb s s' then fold_right (@app idx) [] (map (list_of_addends d f' s) args) else [i]
       | _ => [i]
       end
     | None => [i]
