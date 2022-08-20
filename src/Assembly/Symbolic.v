@@ -313,6 +313,7 @@ Module OpMap := FMapOp.OpMap.
 Definition associative o := match o with add _|mul _|mulZ|or _|and _|xor _|andZ|orZ|xorZ=> true | _ => false end.
 Definition commutative o := match o with add _|addcarry _|addoverflow _|mul _|mulZ|or _|and _|xor _|andZ|orZ|xorZ => true | _ => false end.
 Definition identity o := match o with mul N0 => Some 0%Z| mul _|mulZ=>Some 1%Z |add _|addZ|or _|orZ|xor _|xorZ|addcarry _|addcarryZ _|addoverflow _ => Some 0%Z | and s => Some (Z.ones (Z.of_N s))|andZ => Some (-1)%Z |_=> None end.
+Definition sum o := match o with add _|addZ => true | _ => false end.
 (* identity, but not in the first slot *)
 Definition identity_after_0 o := match o with subborrow _|subborrowZ _ => Some 0%Z | _=> None end.
 Definition unary_truncate_size o := match o with add s|and s|or s|xor s|mul s => Some (Z.of_N s) | addZ|mulZ|andZ|orZ|xorZ => Some (-1)%Z | _ => None end.
@@ -1315,6 +1316,8 @@ Print reveal.
 Print reveal_step.
 Print dag.lookup.
 
+Print N. Print positive.
+
 Fixpoint list_of_addends (d : dag) (f : nat) (s : OperationSize) (i : idx) : list idx :=
   match f with
   | S f' =>
@@ -1328,6 +1331,181 @@ Fixpoint list_of_addends (d : dag) (f : nat) (s : OperationSize) (i : idx) : lis
     end
   | O => [i]
   end.
+
+Lemma break_add (m1 m2 n : Z) ctx d s l1 l2:
+  Z.add m1 m2 = n ->
+  eval ctx d (ExprApp (add s, l1)) m1 ->
+  eval ctx d (ExprApp (add s, l2)) m2 ->
+  eval ctx d (ExprApp (add s, l1 ++ l2)) n.
+Proof. Admitted.
+
+Lemma break_add_backwards (n : Z) ctx d s l1 l2:
+  eval ctx d (ExprApp (add s, l1 ++ l2)) n ->
+  exists m1 m2,
+  Z.add m1 m2 = n /\
+  eval ctx d (ExprApp (add s, l1)) m1 /\
+  eval ctx d (ExprApp (add s, l2)) m2.
+Proof. Admitted.
+
+Lemma app_is_cons {X} (x : X) (l : list X):
+  x :: l = [x] ++ l.
+Proof. reflexivity. Qed.
+
+Lemma small_sum ctx s0 args' y: 
+  interp_op ctx (add s0) args' = Some y -> 
+  Z.le y (Z.ones (Z.of_N s0)).
+Proof. Admitted.
+
+Lemma le_and_ones y n: 
+  Z.le y (Z.ones (Z.of_N n)) -> Z.land y (Z.ones (Z.of_N n)) = y.
+Proof. Admitted.
+
+Lemma collapse_addition ctx d s0 i n args: 
+  eval ctx d (ExprApp (add s0, [ExprRef i])) n ->
+  dag.lookup d i = Some (add s0, args) ->
+  eval ctx d (ExprApp (add s0, map ExprRef args)) n.
+Proof.
+  intros. Print interp_op. Print eval. Print eval. Print interp_op.
+  inversion H. subst. inversion H3; subst. inversion H4; subst. rewrite H0 in H2.
+  injection H2 as H2 H2'. subst. Print eval. inversion H7; subst.
+  assert (E: interp_op ctx (add s0) [y] = Some y).
+  - simpl. f_equal. rewrite Z.add_0_r. apply le_and_ones. apply (small_sum ctx s0 args').
+    apply H8.
+  - rewrite E in H5. injection H5 as H5. subst. clear E. Print EApp. apply (EApp _ _ _ _ args').
+    + apply H6.
+    + apply H8.
+Qed.
+
+(* Lemma eval_list_of_addends (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
+  forall i n,
+  eval ctx d (ExprApp (add s, [ExprRef i])) n ->
+  eval ctx d (ExprApp (add s, map ExprRef (list_of_addends d f s i))) n.
+Proof.
+  induction f as [| f' IHf'].
+  - intros. simpl. apply H.
+  - intros. simpl. (* inversion H; subst. inversion H2; subst. inversion H3; subst. *)
+    destruct (dag.lookup d i) as [ [o args]|] eqn:E1; try apply H.
+    destruct o; try apply H.
+    destruct (s =? s0)%N eqn:E; try apply H. apply N.eqb_eq in E. subst.
+    apply (collapse_addition _ _ _ _ _ _ H) in E1. clear H.
+    generalize dependent n. induction args as [| arg args1 IHargs1].
+    + intros. simpl. simpl in E1. apply E1.
+    + intros. simpl. rewrite map_app. apply break_add. *)
+
+Lemma eval_list_of_addends (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
+  forall i n,
+  eval ctx d (ExprApp (add s, [ExprRef i])) n ->
+  eval ctx d (ExprApp (add s, map ExprRef (list_of_addends d f s i))) n.
+Proof.
+  induction f as [| f' IHf'].
+  - intros. simpl. apply H.
+  - intros. simpl. (* inversion H; subst. inversion H2; subst. inversion H3; subst. *)
+    destruct (dag.lookup d i) as [ [o args]|] eqn:E1; try apply H.
+    destruct o; try apply H.
+    destruct (s =? s0)%N eqn:E; try apply H. apply N.eqb_eq in E. subst.
+    apply (collapse_addition _ _ _ _ _ _ H) in E1. clear H.
+    generalize dependent n. induction args as [| arg args1 IHargs1].
+    + intros. simpl. simpl in E1. apply E1.
+    + intros. simpl. rewrite map_app. simpl in E1. Search app. rewrite app_is_cons in E1.
+      apply break_add_backwards in E1. destruct E1 as [m1 [m2 [E1 [E2 E3] ] ] ].
+      Print break_add. apply (break_add m1 m2 n).
+      -- apply E1.
+      -- apply IHf'. apply E2.
+      -- apply IHargs1. apply E3.
+Qed.
+
+(* Search 
+
+  simpl in H8. injection H5 as H5. injection H8 as H8.
+  remember (interp_op ctx o assert (E: eval ctx d (ExprRef i) ) 
+    + Print eval. assert (E': Forall2 (eval ctx d) (map ExprRef []) []). { apply Forall2_nil. }
+      Print eval. apply (ERef _ _ _ _ _ _ _ H0 E'). reflexivity.
+    + assert (E': eval ctx d (ExprApp (add s0, [ExprRef i])) 0).
+      -- Print eval. apply (EApp _ _ _ _ [0]%Z).
+        ++ apply Forall2_cons.
+          --- apply E.
+          --- apply Forall2_nil.
+        ++ reflexivity.
+      -- Search eval. assert (E'': n = 0%Z).
+        ++ Print eval_eval. apply (eval_eval ctx d (ExprApp (add s0, [ExprRef i])) _ H _ E').
+        ++ rewrite E''. Print eval. apply (EApp _ _ _ _ []).
+          --- apply Forall2_nil.
+          --- reflexivity.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+generalize dependent H0. generalize dependent H. induction args as [| arg args1 IHargs1].
+  - intros. simpl. Print interp_op. Print eval. Print eval. assert (E: eval ctx d (ExprRef i) 0). 
+    + Print eval. assert (E': Forall2 (eval ctx d) (map ExprRef []) []). { apply Forall2_nil. }
+      Print eval. apply (ERef _ _ _ _ _ _ _ H0 E'). reflexivity.
+    + assert (E': eval ctx d (ExprApp (add s0, [ExprRef i])) 0).
+      -- Print eval. apply (EApp _ _ _ _ [0]%Z).
+        ++ apply Forall2_cons.
+          --- apply E.
+          --- apply Forall2_nil.
+        ++ reflexivity.
+      -- Search eval. assert (E'': n = 0%Z).
+        ++ Print eval_eval. apply (eval_eval ctx d (ExprApp (add s0, [ExprRef i])) _ H _ E').
+        ++ rewrite E''. Print eval. apply (EApp _ _ _ _ []).
+          --- apply Forall2_nil.
+          --- reflexivity.
+  - intros. simpl.
+        
+    Print eval. apply (EApp _ _ _ _ []).
+    + constructor.
+    + 
+inversion H; subst. simpl in H5. inversion H5; subst. inversion H3; subst. inversion H7; subst. clear H7.
+  
+
+
+    generalize dependent E1. generalize dependent n. generalize dependent i.
+    induction args as [| arg args' IHargs'].
+    2: {
+    intros.
+    
+    apply IHf' in H.
+
+
+
+    simpl. inversion H; subst. inversion H2; subst. inversion H3; subst. rewrite E1 in H1.
+    injection H1 as H1 H1'. subst. simpl in H7. clear H4 H2 H3 H6 E1 l' i H. generalize dependent args'. (* inversion H5; subst. simpl in H7. injection H7 as H7. *)
+
+    induction args as [| arg args' IHargs'].
+    + simpl. inversion H; subst. inversion H2; subst. inversion H3; subst. rewrite E1 in H1.
+      injection H1 as H1 H1'. subst. inversion H5; subst. simpl in H7. injection H7 as H7.
+      Search eval. Print eval_node.
+      inversion H6. subst. simpl in H4. injection H4 as H4. subst.
+      apply (EApp _ _ _ _ []).
+      -- constructor.
+      -- reflexivity.
+    + 
+    induction args0 as [| args args0' IHargs0']. 2: {
+    generalize dependent args'. generalize dependent i. generalize dependent n.
+    induction args0 as [| arg args0' IHargs0'].
+    + intros. simpl.
+      inversion H2; subst. inversion H3; subst. rewrite E1 in H1. injection H1 as H1 H1'. subst.
+      inversion H5; subst. simpl in H7. injection H7 as H7.
+      inversion H6. subst. simpl in H4. injection H4 as H4. subst.
+      Print eval. apply (EApp _ _ _ _ []).
+      -- constructor.
+      -- reflexivity.
+    + intros. simpl. Search eval. Print eval. simpl. apply IHf' in H. inversion H5; subst.
+      simpl in H7. *)
+
 
 Print N.
 Print positive.
@@ -1354,7 +1532,74 @@ Fixpoint withadc_without (d : dag) (s : OperationSize) (args : list idx) : (list
     end
   end.
 
-Print N.Sort.iter_merge.
+Definition keep n x := Z.land x (Z.ones (Z.of_N n)).
+Print Z.shiftr. Print Z.shiftl.
+
+Print expr.
+
+Definition expr_of_a_carry (s : OperationSize) (carry : list (list idx)) : expr :=
+  let with_small_adds := map (fun addends => ExprApp (add s, map ExprRef addends)) carry in
+  ExprApp (shrZ, [ExprApp (addZ, with_small_adds); ExprApp (const (Z.of_N s), [])]).
+
+Definition exprs_of_carries (s : OperationSize) (carries : list (list (list idx))) : list expr :=
+  map (expr_of_a_carry s) carries.
+
+(* Definition value_of_a_carry (val : idx -> Z) (s : OperationSize) (carry : list (list idx)) : Z :=
+  let sums := map (fun addends => keep s (fold_right (fun x y => Z.add (val x) y) 0%Z addends)) carry in
+  Z.shiftr (fold_right Z.add 0%Z sums) (Z.of_N s).
+
+Definition value_of_carries (val : idx -> Z) (s : OperationSize) (carries : list (list (list idx))) : Z :=
+  let values := map (value_of_a_carry val s) carries in
+  fold_right Z.add 0%Z values. *)
+
+Search eval.
+
+Lemma eval_withadc_without (ctx : symbol -> option Z) (d : dag) (s : OperationSize):
+  forall args n a1 a2,
+  let (withadc, without) := withadc_without d s args in
+  eval ctx d (ExprApp (addZ, map ExprRef args)) n ->
+  eval ctx d (ExprApp (addZ, map ExprRef without)) a1 ->
+  eval ctx d (ExprApp (addZ, exprs_of_carries s withadc)) a2 ->
+  Z.add a1 a2 = n.
+Proof.
+  intros args. induction args as [| i args'].
+  - simpl. intros.
+    inversion H. subst. inversion H4. subst.
+    inversion H0. subst. inversion H5. subst.
+    inversion H1. subst. inversion H7. subst.
+    clear H4 H5 H7. simpl in H6. simpl in H8. simpl in H10.
+    injection H6 as H6. injection H8 as H8. injection H10 as H10.
+    subst. reflexivity.
+  - destruct (withadc_without d s (i :: args')) as [withadc without] eqn:E. simpl in E.
+    destruct (withadc_without d s args') as [withadc' without'] eqn:E1.
+    intros.
+    assert (Lemma: (withadc, without) = (withadc', i :: without') -> (a1 + a2)%Z = n).
+    { clear E. intros E. injection E as E E'. rewrite E in *. rewrite E' in *. clear E E'.
+    inversion H. subst. inversion H4. subst.
+         inversion H0. subst. inversion H7. subst.
+         inversion H5; subst. inversion H9; subst.
+         simpl in H6. injection H6 as H6. simpl in H10. injection H10 as H10.
+         rewrite <- H6. rewrite <- H10.
+         rewrite H3 in H14. injection H14 as H14 H14'. subst.
+         assert (E3: args'0 = args'1).
+         { apply (eval_eval_Forall2 _ _ _ _ H11 _ H15). }
+         subst. rewrite H13 in H16. injection H16 as H16. subst.
+         rewrite <- Z.add_assoc. f_equal. apply IHargs'.
+         ++ Print eval. apply (EApp _ _ _ _ _ _ H8). simpl. reflexivity.
+         ++ Print eval. apply (EApp _ _ _ _ _ _ H12). simpl. reflexivity.
+         ++ assumption.
+    }
+    destruct (dag.lookup d i) as [ [op op_args]|].
+    + destruct op_args as [| arg1 [| arg2 [| arg3 op_args'] ] ].
+      -- apply Lemma. rewrite <- E. destruct op; reflexivity.
+      -- apply Lemma. rewrite <- E. destruct op; reflexivity.
+      -- destruct op; try (apply Lemma; rewrite <- E; reflexivity).
+         destruct (s0 =? s)%N eqn:Es.
+         ++ Admitted. 
+
+(* 
+  destruct (withadc_without d s args) as [withadc without] eqn:E1.
+  intros. *)
 
 Require Import Coq.Sorting.Mergesort.
 
@@ -1457,25 +1702,29 @@ Compute ((merge_carries [ [ [27]; [18; 09] ]; [ [18]; [09] ]  ]%N)).
 
 Print op.
 Print expr.
+Print merge_node.
+Compute (dag.M idx).
 
-Definition sum_expr (s : OperationSize) (indices : list idx) : expr :=
+Definition sum_idx {descr : description} (d : dag) (s : OperationSize) (indices : list idx) : idx * dag :=
   match indices with
-  | [] => ExprApp (add s, []) (* should never happen *)
-  | i :: [] => ExprRef i
-  | _ => ExprApp (add s, (map (fun i => ExprRef i)) indices)
+  | [] => merge_node (add s, []) d (* should never happen *)
+  | i :: [] => (i, d)
+  | _ => merge_node (add s, indices) d
   end.
-    
+
+Print merge_node.
 
 (* list of things to be added *)
-Fixpoint split_carry_aux (s : OperationSize) (carry : list (list idx)) : list expr :=
+Fixpoint split_carry_aux {descr : description} (d : dag) (s : OperationSize) (carry : list (list idx)) : list idx * dag :=
   match carry with
-  | [] => []
-  | _ :: [] => [] (* should never happen *)
+  | [] => ([], d)
+  | _ :: [] => ([], d) (* should never happen *)
   | x :: more_stuff =>
-    ExprApp (addcarry s, [
-                            sum_expr s x;
-                            sum_expr s (fold_right (@app idx) [] more_stuff)
-                          ]) :: split_carry_aux s more_stuff
+    let (adc_arg_1, d1) := sum_idx d s x in
+    let (adc_arg_2, d2) := sum_idx d1 s (fold_right (@app idx) [] more_stuff) in
+    let (i, d3) := merge_node (addcarry s, [adc_arg_1; adc_arg_2]) d2 in
+    let (is, d4) := split_carry_aux d3 s more_stuff in
+    (i :: is, d4)
   end.
 
 Module lexOrder <: TotalLeBool.
@@ -1500,24 +1749,25 @@ End lexOrder.
 Module Import lexSort := Sort lexOrder.
 Print sort.
 
-Definition split_carry (s : OperationSize) (carry : list (list idx)) : list expr :=
+(* merges the addcarries that make up the carry into the dag, returns a list of index references to the addcarries *)
+Definition split_carry {descr : description} (d : dag) (s : OperationSize) (carry : list (list idx)) : list idx * dag :=
   let carry := map (fun x => N.sort x) carry in
   let carry := sort carry in
-  split_carry_aux s carry.
+  split_carry_aux d s carry.
 
-Fixpoint split_carries (s : OperationSize) (l : list (list (list idx))) : list expr :=
+Fixpoint split_carries {descr : description} (d : dag) (s : OperationSize) (l : list (list (list idx))) : list idx * dag :=
   match l with
-  | [] => []
-  | carry :: more => split_carry s carry ++ split_carries s more
+  | [] => ([], d)
+  | carry :: more =>
+    let (some_addends, d') := split_carry d s carry in
+    let (more_addends, d'') := split_carries d' s more in
+    (some_addends ++ more_addends, d'')
   end.
 
-Definition standardize_adc_sum (d : dag) (o :  op) (idxs : list idx) (s : OperationSize) : list expr :=
-  match o with
-  | (addZ | add _) =>
-    let (withadc, without) := withadc_without d s idxs in
-    split_carries s (merge_carries withadc) ++ (map (fun i => ExprRef i) without)
-  | _ => map (fun i => ExprRef i) idxs
-  end.
+Definition standardize_adc_sum {descr : description} (d : dag) (idxs : list idx) (s : OperationSize) : list idx * dag :=
+  let (withadc, without) := withadc_without d s idxs in
+  let (standard_withadc, d') := split_carries d s (merge_carries withadc) in
+  (standard_withadc ++ without, d').
 
 Print dag.t.
 Print description.
@@ -1526,52 +1776,24 @@ Definition d1 : dag := [(addcarry 64, [101; 102], None); (add 64, [101; 102], No
 Definition d2 : dag := [(addcarry 64, [101; 102], None); (add 64, [101; 102], None); (addcarry 64, [1; 103], None)]%N.
 Definition d3 : dag := [(const 0, [], None); (const 1, [], None); (const 2, [], None); (const 3, [], None); (const 4, [], None); (const 5, [], None); (const 6, [], None); (const 7, [], None); (const 8, [], None); (add 64, [5; 7], None); (addcarry 64, [5; 7], None); (add 64, [0; 5; 7], None); (addcarry 64, [0; 9], None); (add 64, [0; 3; 5; 7], None); (addcarry 64, [3; 11], None); (addcarry 64, [1; 13], None)]%N.
 
-Compute (standardize_adc_sum d3 (add 64) [2; 4; 6; 8; 10; 12; 14; 15] 64)%N. (* this doesn't work *)
+Compute (standardize_adc_sum d3 [2; 4; 6; 8; 10; 12; 14; 15] 64)%N. (* this doesn't work *)
 
 Compute (merge_carries (fst (withadc_without d3 64 [2; 4; 6; 8; 10; 12; 14; 15])))%N. (* because this doesn't work :) *)
 
 Compute ((fst (withadc_without d3 64 [2; 4; 6; 8; 10; 12; 14; 15])))%N.
 
 Print dag.lookup.
-Compute (standardize_adc_sum d1 addZ [0; 2] 64)%N.
-
- (*  Fixpoint standardize_adc
-
-  Fixpoint standardize_adc (d : dag.t) (e : expr) : dag.t * expr :=
-    let (d', e') := 
-      match e with
-      | ExprRef i => (d, (reveal 1 i))
-      | ExprApp (op, args) => ExprApp (op, List.map (standardize_adc d) args)
-      end (**)
-    in
-    match e' with
-    | ExprRef i => (* the node i is undefined, i.e., not in the dag *) ExprRef i
-    | ExprApp (op, args) =>
-      match op with
-      | (addZ | add _) =>
-        
-      | _ => ExprApp (op, args)
-      end
-    end. *)
-
-Fixpoint nonstandard_merge {descr : description} (e : expr) (d : dag) : idx * dag :=
-  match e with
-  | ExprRef i => (i, d)
-  | ExprApp (op, args) =>
-    let idxs_d := List.foldmap nonstandard_merge args d in
-    let idxs := if commutative op
-                then N.sort (fst idxs_d)
-                else (fst idxs_d) in
-    merge_node (op, idxs) (snd idxs_d)
-  end.
+Compute (standardize_adc_sum d1 [0; 2] 64)%N.
 
 Fixpoint merge {descr : description} (e : expr) (d : dag) : idx * dag :=
   match e with
   | ExprRef i => (i, d)
   | ExprApp (op, args) =>
     let idxs_d := List.foldmap merge args d in
-    let standard_expr_list := standardize_adc_sum (snd idxs_d) op (fst idxs_d) 64%N in (* FIXME: this 64 should not be hardcoded *) 
-    let idxs_d' := List.foldmap nonstandard_merge standard_expr_list (snd idxs_d) in
+    let idxs_d' := 
+                if sum op 
+                then standardize_adc_sum (snd idxs_d) (fst idxs_d) 64%N (* FIXME: this 64 should not be hardcoded *)
+                else idxs_d in
     let idxs := if commutative op
                 then N.sort (fst idxs_d')
                 else (fst idxs_d') in
@@ -1637,6 +1859,17 @@ Lemma gensym_ok_merge_node G d {descr:description} n
   : gensym_ok G d -> gensym_ok G (snd (dag.merge_node n d)).
 Proof using Type. apply gensym_ok_size_Proper, dag.size_merge_node_le. Qed.
 
+Lemma gensym_ok_sum_idx {descr : description} G :
+  forall idxs s,
+  forall d, gensym_ok G d ->
+  gensym_ok G (snd (sum_idx d s idxs)).
+Proof.
+  intros. cbv [sum_idx]. destruct idxs as [| i [| i' idxs''] ].
+  - apply gensym_ok_merge_node. apply H.
+  - simpl. apply H.
+  - apply gensym_ok_merge_node. apply H.
+Qed.
+
 Lemma empty_gensym_dag_ok : gensym_dag_ok (fun _ => None) dag.empty.
 Proof using Type.
   cbv [gensym_dag_ok dag_ok gensym_ok].
@@ -1680,8 +1913,134 @@ Proof using Type.
       | eauto using Forall2_weaken, eval_weaken_merge_node .. ]. }
 Qed.
 
+Lemma sth_about_snd : forall {X Y} (x : X) (y : Y) (z : X*Y), z = (x, y) -> y = snd z.
+Proof.
+  intros. assert (H': snd z = snd (x, y)).
+  - f_equal. apply H.
+  - simpl in H'. symmetry. apply H'.
+Qed.
+
+Lemma gensym_ok_split_carry_aux {descr : description} G :
+  forall carry s,
+  forall d, gensym_ok G d ->
+  gensym_ok G (snd (split_carry_aux d s carry)).
+Proof.
+  intros carry. induction carry as [| i carry' IH].
+  - intros. simpl. apply H.
+  - intros. destruct carry' as [| i' carry''].
+    + simpl. apply H.
+    + remember (i' :: carry'') as carry'. simpl. destruct carry' as [| i'_ carry''_].
+      -- simpl. apply H.
+      -- remember (i'_ :: carry''_) as carry'.
+      destruct (sum_idx d s i) as [adc_arg_1 d1] eqn:E1.
+      destruct (sum_idx d1 s (fold_right (app (A:=idx)) [] carry')) as [adc_arg_2 d2] eqn:E2.
+      destruct (merge_node (addcarry s, [adc_arg_1; adc_arg_2]) d2) as [i1 d3] eqn:E3.
+      destruct (split_carry_aux d3 s carry') as [i2 d4] eqn:E4.
+      simpl. rewrite (sth_about_snd _ _ _ E4). apply IH. clear i2 d4 E4.
+      rewrite (sth_about_snd _ _ _ E3). apply gensym_ok_merge_node. clear i1 d3 E3.
+      rewrite (sth_about_snd _ _ _ E2). apply gensym_ok_sum_idx. clear adc_arg_2 d2 E2.
+      rewrite (sth_about_snd _ _ _ E1). apply gensym_ok_sum_idx. apply H.
+Qed.
+
+Lemma gensym_dag_ok_split_carry_aux {descr : description} G :
+  forall carry s,
+  forall d, gensym_dag_ok G d ->
+  gensym_dag_ok G (snd (split_carry_aux d s carry)).
+Proof.
+  intros carry. induction carry as [| i carry' IH].
+  - intros. simpl. apply H.
+  - intros. remember (eval_merge_node _ _ H) as H'. clear HeqH'. destruct carry' as [| i' carry''].
+    + simpl. apply H.
+    + remember (i' :: carry'') as carry'. simpl. destruct carry' as [| i'_ carry''_].
+      -- simpl. apply H.
+      -- remember (i'_ :: carry''_) as carry'.
+        destruct (sum_idx d s i) as [adc_arg_1 d1] eqn:E1.
+        destruct (sum_idx d1 s (fold_right (app (A:=idx)) [] carry')) as [adc_arg_2 d2] eqn:E2.
+        destruct (merge_node (addcarry s, [adc_arg_1; adc_arg_2]) d2) as [i1 d3] eqn:E3.
+        destruct (split_carry_aux d3 s carry') as [i2 d4] eqn:E4.
+        simpl. rewrite (sth_about_snd _ _ _ E4). apply IH. clear i2 d4 E4.
+        cbv [gensym_dag_ok]. split.
+        ++ rewrite (sth_about_snd _ _ _ E3). apply gensym_ok_merge_node. clear i1 d3 E3.
+           rewrite (sth_about_snd _ _ _ E2). apply gensym_ok_sum_idx. clear adc_arg_2 d2 E2.
+           rewrite (sth_about_snd _ _ _ E1). apply gensym_ok_sum_idx. apply H.
+        ++ cbv [dag_ok]. Admitted.
+(* Qed.
+ *)
+Lemma gensym_ok_split_carry {descr : description} G :
+  forall carry s,
+  forall d, gensym_ok G d ->
+  gensym_ok G (snd (split_carry d s carry)).
+Proof.
+  intros. cbv [split_carry]. apply gensym_ok_split_carry_aux. apply H.
+Qed.
+
+Print split_carries.
+
+Lemma gensym_ok_split_carries {descr : description} G :
+  forall carries s,
+  forall d, gensym_ok G d ->
+  gensym_ok G (snd (split_carries d s carries)).
+Proof.
+  intros carries. induction carries as [| carry more_carries IH].
+  - intros. simpl. apply H.
+  - intros. simpl.
+    destruct (split_carry d s carry) as [some_addends d'] eqn:E1.
+    destruct (split_carries d' s more_carries) as [more_addends d''] eqn:E2.
+    simpl. rewrite (sth_about_snd _ _ _ E2). apply IH.
+    rewrite (sth_about_snd _ _ _ E1). apply gensym_ok_split_carry.
+    apply H.
+Qed.
+
+Print eval.
+
 Require Import coqutil.Tactics.autoforward coqutil.Decidable coqutil.Tactics.Tactics.
 Global Set Default Goal Selector "1".
+
+Print eval.
+Print Forall2.
+Print gensym_dag_ok.
+Print gensym_ok.
+Print dag_ok.
+Print dag.ok.
+Print dag.size_ok.
+Print standardize_adc_sum.
+Print symbol.
+Print eval.
+
+Lemma eval_
+
+Lemma eval_standardize_adc_sum {descr : description}:
+  forall G d s, gensym_dag_ok G d ->
+  forall op args n, let e := (op, args) in
+  eval G d (ExprApp (op, List.map ExprRef args)) n ->
+  let result := standardize_adc_sum d args s in
+  eval G (snd result) (ExprApp (op, List.map ExprRef (fst result))) n (*/\
+  gensym_dag_ok G (snd result) /\
+  forall i e', eval G d i e' -> eval G (snd result) i e'*).
+Proof.
+  intros.
+
+
+forall idxs o s,
+  forall d, gensym_dag_ok G d ->
+  sum o = true ->
+  
+  gensym_dag_ok G (snd (standardize_adc_sum d idxs s)) /\
+  
+
+Lemma eval_standardize_adc {descr : description} G :
+  forall idxs o s,
+  forall d, gensym_dag_ok G d ->
+  eval G d e n ->
+  eval G (snd (merge e d)) (ExprRef (fst (merge e d))) n /\
+  gensym_dag_ok G (snd (merge e d)) /\
+  forall i e', eval G d i e' -> eval G (snd (merge e d)) i e'.
+Proof.
+  intros idxs o s d. cbv [gensym_dag_ok standardize_adc_sum]. intros [H1 H2] H3. split.
+  - destruct (withadc_without d s idxs) as [withadc without] eqn:E1.
+    destruct (split_carries d s (merge_carries withadc)) as [standard_withadc d'] eqn:E2.
+    simpl. rewrite (sth_about_snd _ _ _ E2). apply gensym_ok_split_carries. apply H1.
+  - 
 
 Lemma eval_merge {descr:description} G :
   forall e n,
@@ -1691,7 +2050,7 @@ Lemma eval_merge {descr:description} G :
   gensym_dag_ok G (snd (merge e d)) /\
   forall i e', eval G d i e' -> eval G (snd (merge e d)) i e'.
 Proof using Type. Admitted.
-  (* induction e; intros; eauto; [].
+  induction e; intros; eauto; [].
   rename n0 into v.
 
   set (merge _ _) as m; cbv beta iota delta [merge] in m; fold @merge in m.
@@ -1747,7 +2106,7 @@ Proof using Type. Admitted.
     { setoid_rewrite <-H8. setoid_rewrite <-H9. eassumption. }
     rewrite ListUtil.map_nth_default_always. eapply H10. }
   Unshelve. all : constructor.
-Qed. *)
+Qed.
 
 Definition zconst s (z:Z) := const (Z.land z (Z.ones (Z.of_N s)))%Z.
 
