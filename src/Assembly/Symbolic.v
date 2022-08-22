@@ -1324,7 +1324,8 @@ Fixpoint list_of_addends (d : dag) (f : nat) (s : OperationSize) (i : idx) : lis
     match dag.lookup d i with
     | Some (o, args) =>
       match o with
-      | add s' => if N.eqb s s' then fold_right (@app idx) [] (map (list_of_addends d f' s) args) else [i]
+      | add s' => if N.leb s s' then fold_right (@app idx) [] (map (list_of_addends d f' s) args) else [i]
+      | addZ => fold_right (@app idx) [] (map (list_of_addends d f' s) args)
       | _ => [i]
       end
     | None => [i]
@@ -1332,49 +1333,182 @@ Fixpoint list_of_addends (d : dag) (f : nat) (s : OperationSize) (i : idx) : lis
   | O => [i]
   end.
 
+Local Open Scope Z_scope.
+
+Lemma Z_land_ones' : forall (s : N) (a : Z), Z.land a (Z.ones (Z.of_N s)) = (a mod 2 ^ Z.of_N s)%Z.
+Proof. intros. assert (E: Z.le 0 (Z.of_N s)) by lia. auto using Z.land_ones. Qed.
+
+Lemma break_addZ_small : forall l1 l2,
+  (fold_right Z.add 0 l1) + (fold_right Z.add 0 l2) = fold_right Z.add 0 (l1 ++ l2).
+Proof.
+  intros. induction l1.
+  - reflexivity.
+  - simpl. rewrite <- IHl1. lia.
+Qed.
+
 Lemma break_add (m1 m2 n : Z) ctx d s l1 l2:
-  Z.add m1 m2 = n ->
+  interp_op (fun _ => None) (add s) [m1; m2] = Some n ->
   eval ctx d (ExprApp (add s, l1)) m1 ->
   eval ctx d (ExprApp (add s, l2)) m2 ->
   eval ctx d (ExprApp (add s, l1 ++ l2)) n.
-Proof. Admitted.
+Proof.
+  simpl. intros. inversion H0; subst. inversion H1; subst.
+  apply (EApp _ _ _ _ (args' ++ args'0)).
+  - apply Forall2_app.
+    + apply H4.
+    + apply H5.
+  - simpl. f_equal. injection H as H. rewrite <- H. injection H6 as H6. injection H8 as H8.
+    rewrite <- H6. rewrite <- H8. rewrite Z.add_0_r. repeat rewrite Z_land_ones'. rewrite <- break_addZ_small.
+    rewrite <- PullPush.Z.add_mod_full. reflexivity.
+Qed.
+
+Lemma break_addZ (m1 m2 n : Z) ctx d l1 l2:
+  interp_op (fun _ => None) addZ [m1; m2] = Some n ->
+  eval ctx d (ExprApp (addZ, l1)) m1 ->
+  eval ctx d (ExprApp (addZ, l2)) m2 ->
+  eval ctx d (ExprApp (addZ, l1 ++ l2)) n.
+Proof.
+  simpl. intros. inversion H0; subst. inversion H1; subst.
+  apply (EApp _ _ _ _ (args' ++ args'0)).
+  - apply Forall2_app.
+    + apply H4.
+    + apply H5.
+  - simpl. f_equal. injection H as H. rewrite <- H. injection H6 as H6. injection H8 as H8.
+    rewrite <- H6. rewrite <- H8. symmetry. rewrite Z.add_0_r. apply break_addZ_small.
+Qed.
 
 Lemma break_add_backwards (n : Z) ctx d s l1 l2:
   eval ctx d (ExprApp (add s, l1 ++ l2)) n ->
   exists m1 m2,
-  Z.add m1 m2 = n /\
+  interp_op (fun _ => None) (add s) [m1; m2] = Some n /\
   eval ctx d (ExprApp (add s, l1)) m1 /\
   eval ctx d (ExprApp (add s, l2)) m2.
-Proof. Admitted.
+Proof.
+  intros. Check interp_op. inversion H; subst. Search Forall2. apply Forall2_app_inv_l in H2.
+  destruct H2 as [l1' [l2' [H1 [H2 H3] ] ] ]. Check interp_op.
+  assert (E1: exists m1, interp_op ctx (add s) l1' = Some m1). { simpl. eauto. }
+  assert (E2: exists m2, interp_op ctx (add s) l2' = Some m2). { simpl. eauto. }
+  destruct E1 as [m1 E1]. destruct E2 as [m2 E2].
+  exists m1. exists m2. split.
+  - simpl. f_equal. rewrite Z.add_0_r. simpl in H4. injection H4 as H4. simpl in E1. simpl in E2. subst.
+    injection E1 as E1. injection E2 as E2. subst. repeat rewrite Z_land_ones'. rewrite <- break_addZ_small.
+    rewrite <- PullPush.Z.add_mod_full. reflexivity.
+  - split.
+    + apply EApp with (args' := l1'); assumption.
+    + apply EApp with (args' := l2'); assumption.
+Qed.
+
+Lemma break_addZ_backwards (n : Z) ctx d l1 l2:
+  eval ctx d (ExprApp (addZ, l1 ++ l2)) n ->
+  exists m1 m2,
+  interp_op (fun _ => None) addZ [m1; m2] = Some n /\
+  eval ctx d (ExprApp (addZ, l1)) m1 /\
+  eval ctx d (ExprApp (addZ, l2)) m2.
+Proof.
+  intros. Check interp_op. inversion H; subst. Search Forall2. apply Forall2_app_inv_l in H2.
+  destruct H2 as [l1' [l2' [H1 [H2 H3] ] ] ]. Check interp_op.
+  assert (E1: exists m1, interp_op ctx (addZ) l1' = Some m1). { simpl. eauto. }
+  assert (E2: exists m2, interp_op ctx (addZ) l2' = Some m2). { simpl. eauto. }
+  destruct E1 as [m1 E1]. destruct E2 as [m2 E2].
+  exists m1. exists m2. split.
+  - simpl. f_equal. rewrite Z.add_0_r. simpl in H4. injection H4 as H4. simpl in E1. simpl in E2. subst.
+    injection E1 as E1. injection E2 as E2. subst. rewrite <- break_addZ_small. reflexivity.
+  - split.
+    + apply EApp with (args' := l1'); assumption.
+    + apply EApp with (args' := l2'); assumption.
+Qed.
 
 Lemma app_is_cons {X} (x : X) (l : list X):
   x :: l = [x] ++ l.
 Proof. reflexivity. Qed.
 
+Compute (Z.land 0 (-100)).
+
+Lemma and_pos : forall x y,
+  Z.le 0 y -> Z.le 0 (Z.land x y).
+Proof.
+  intros. cbv [Z.land]. destruct x as [| a| a]; destruct y as [| b| b]; lia.
+Qed.
+
+Check Z.land_ones.
+Print Z.mod_small.
+Compute (-1 mod 5)%Z.
+Lemma le_and_ones y n: 
+  Z.le 0 y /\ Z.le y (Z.ones (Z.of_N n)) -> Z.land y (Z.ones (Z.of_N n)) = y.
+Proof.
+  intros. assert (E: Z.le 0 (Z.of_N n)) by lia. apply (Z.land_ones y) in E.
+  rewrite E. clear E. apply Z.mod_small. cbv [Z.ones] in H. rewrite Z.shiftl_1_l in H.
+  lia.
+Qed.
+
+(* Lemma and_le_pos : forall a b p,
+  Pos.land a bd = N.pos p -> Pos.le b p.
+Proof.
+  intros a b. Print positive. induction b as [b' IHb'|b' IHb'|].
+  - (* cbv [Pos.le Pos.compare Pos.compare_cont]. *) destruct p as [p'|p'|]; try lia.
+    + destruct a as [a'|a'|].
+      -- simpl. intros. (* cbv [Pos.Nsucc_double] in H. *) simpl. cbv [Pos.le Pos.compare]. simpl.
+         apply IHb'. simpl. destruct b' as [b''|b''|].
+        ++ simpl in H.
+Lemma and_le : forall n m,
+  Z.le 0 m -> Z.le 0 (Z.land n m) /\ Z.le (Z.land n m) m.
+Proof.
+  intros. cbv [Z.land]. destruct n as [| a| a]; destruct m as [| b| b]; split; try lia.
+  - cbv [Z.of_N]. destruct (Pos.land a b) eqn:E; try lia. Search N.le.
+    cbv [Z.le Z.compare]. Search Pos.land. Print Pos.le. Search Pos.compare.
+Search Pos.land. Print Pos.land.
+
+  -  *)
+
+
 Lemma small_sum ctx s0 args' y: 
   interp_op ctx (add s0) args' = Some y -> 
-  Z.le y (Z.ones (Z.of_N s0)).
-Proof. Admitted.
+   Z.le 0 y /\ Z.le y (Z.ones (Z.of_N s0)).
+Proof.
+  intros. simpl in H. injection H as H. split.
+  - rewrite <- H. apply and_pos. apply Z.ones_nonneg. lia.
+  - assert (H' : (0 <= Z.of_N s0)%Z) by lia. apply (Z.land_ones (fold_right Z.add 0%Z args')) in H'.
+    rewrite H in H'. clear H. Check Z.mod_small. remember (fold_right Z.add 0%Z args') as sth. clear Heqsth. assert (H'' : (2 ^ Z.of_N s0 > 0)%Z).
+    + lia.
+    + Check Z_mod_lt. apply (Z_mod_lt sth) in H''. destruct H'' as [_ H'']. subst. cbv [Z.ones]. rewrite Z.shiftl_1_l. lia.
+Qed.
 
-Lemma le_and_ones y n: 
-  Z.le y (Z.ones (Z.of_N n)) -> Z.land y (Z.ones (Z.of_N n)) = y.
-Proof. Admitted.
+Ltac inv H := inversion H; subst; clear H.
 
-Lemma collapse_addition ctx d s0 i n args: 
-  eval ctx d (ExprApp (add s0, [ExprRef i])) n ->
+(* Lemma collapse_addition ctx d s0 i n args: 
+  eval ctx d (ExprRef i) n ->
   dag.lookup d i = Some (add s0, args) ->
   eval ctx d (ExprApp (add s0, map ExprRef args)) n.
 Proof.
   intros. Print interp_op. Print eval. Print eval. Print interp_op.
+  inv H. rewrite H0 in H2. clear H0. injection H2; clear H2; intros; subst.
+  apply EApp with (args' := args'); assumption.
+Qed. *)
+
+Lemma collapse_op ctx d i n op args: 
+  eval ctx d (ExprRef i) n ->
+  dag.lookup d i = Some (op, args) ->
+  eval ctx d (ExprApp (op, map ExprRef args)) n.
+Proof.
+  intros. Print interp_op. Print eval. Print eval. Print interp_op.
+  inv H. rewrite H0 in H2. clear H0. injection H2; clear H2; intros; subst.
+  apply EApp with (args' := args'); assumption.
+Qed.
+
+(* Lemma collapse_additionZ ctx d i n args: 
+  eval ctx d (ExprApp (addZ, [ExprRef i])) n ->
+  dag.lookup d i = Some (addZ, args) ->
+  eval ctx d (ExprApp (addZ, map ExprRef args)) n.
+Proof.
+  intros. Print interp_op. Print eval. Print eval. Print interp_op.
   inversion H. subst. inversion H3; subst. inversion H4; subst. rewrite H0 in H2.
   injection H2 as H2 H2'. subst. Print eval. inversion H7; subst.
-  assert (E: interp_op ctx (add s0) [y] = Some y).
-  - simpl. f_equal. rewrite Z.add_0_r. apply le_and_ones. apply (small_sum ctx s0 args').
-    apply H8.
+  assert (E: interp_op ctx (addZ) [y] = Some y).
+  - simpl. f_equal. rewrite Z.add_0_r. reflexivity.
   - rewrite E in H5. injection H5 as H5. subst. clear E. Print EApp. apply (EApp _ _ _ _ args').
     + apply H6.
     + apply H8.
-Qed.
+Qed. *)
 
 (* Lemma eval_list_of_addends (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
   forall i n,
@@ -1392,6 +1526,8 @@ Proof.
     + intros. simpl. simpl in E1. apply E1.
     + intros. simpl. rewrite map_app. apply break_add. *)
 
+(* Worked with the previous version of eval_list_of_addends.
+
 Lemma eval_list_of_addends (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
   forall i n,
   eval ctx d (ExprApp (add s, [ExprRef i])) n ->
@@ -1406,13 +1542,186 @@ Proof.
     apply (collapse_addition _ _ _ _ _ _ H) in E1. clear H.
     generalize dependent n. induction args as [| arg args1 IHargs1].
     + intros. simpl. simpl in E1. apply E1.
-    + intros. simpl. rewrite map_app. simpl in E1. Search app. rewrite app_is_cons in E1.
+    + intros. simpl. rewrite map_app. simpl in E1. rewrite app_is_cons in E1.
       apply break_add_backwards in E1. destruct E1 as [m1 [m2 [E1 [E2 E3] ] ] ].
       Print break_add. apply (break_add m1 m2 n).
       -- apply E1.
       -- apply IHf'. apply E2.
       -- apply IHargs1. apply E3.
+Qed. *)
+
+Lemma mod_add_eq ctx d i n m s:
+  eval ctx d (ExprRef i) n ->
+  eval ctx d (ExprApp (add s, [ExprRef i])) m ->
+  n mod 2 ^ Z.of_N s = m.
+Proof.
+  intros. simpl in H0. inv H0. inv H3. inv H6. Check eval_eval. apply (eval_eval _ _ _ _ H) in H2. clear H.
+  subst. injection H5 as H5. subst. rewrite Z_land_ones'. f_equal. lia.
+Qed. 
+
+Lemma mod_add_eq_backwards ctx d i m s:
+  eval ctx d (ExprApp (add s, [ExprRef i])) m ->
+  exists n,
+  eval ctx d (ExprRef i) n /\
+  n mod 2 ^ Z.of_N s = m.
+Proof.
+  intros. inv H. inv H2. inv H5. exists y. split.
+  - apply H1.
+  - injection H4 as H4. rewrite <- H4. rewrite Z_land_ones'. f_equal; lia.
+Qed. 
+
+Lemma mod_addZ_eq_backwards ctx d i m:
+  eval ctx d (ExprApp (addZ, [ExprRef i])) m ->
+  exists n,
+  eval ctx d (ExprRef i) n /\
+  n = m.
+Proof.
+  intros. inv H. inv H2. inv H5. exists y. split.
+  - apply H1.
+  - injection H4 as H4. rewrite <- H4. lia.
+Qed. 
+
+Lemma mod_add_eq' ctx d n m s s0 args:
+  N.le s s0 ->
+  eval ctx d (ExprApp (add s, args)) m ->
+  eval ctx d (ExprApp (add s0, args)) n ->
+  n mod 2 ^ Z.of_N s = m.
+Proof.
+  intros. inv H0. inv H1. Search eval. apply (eval_eval_Forall2 _ _ _ _ H4) in H3. subst. clear H4.
+  injection H6 as H6. injection H7 as H7. rewrite <- H6. rewrite <- H7. clear H6 H7.
+  rewrite <- Z_land_ones'. rewrite <- Z.land_assoc. rewrite Z.land_ones_ones.
+  replace (Z.of_N s0 <? 0) with false by lia. replace (Z.of_N s <? 0) with false by lia. simpl.
+  replace (Z.min (Z.of_N s0) (Z.of_N s)) with (Z.of_N s) by lia. reflexivity.
 Qed.
+
+Lemma mod_addZ_eq' ctx d n m s args:
+  eval ctx d (ExprApp (add s, args)) m ->
+  eval ctx d (ExprApp (addZ, args)) n ->
+  n mod 2 ^ Z.of_N s = m.
+Proof.
+  intros. inv H. inv H0. apply (eval_eval_Forall2 _ _ _ _ H2) in H3. subst. clear H2.
+  injection H5 as H5. injection H6 as H6. rewrite <- H5. rewrite <- H6. clear H5 H6.
+  rewrite <- Z_land_ones'. reflexivity.
+Qed.
+
+Lemma eval_list_of_addends' (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
+  forall i n m,
+  eval ctx d (ExprRef i) n ->
+  eval ctx d (ExprApp (add s, map ExprRef (list_of_addends d f s i))) m ->
+  n mod (2 ^ Z.of_N s) = m.
+Proof.
+  induction f as [| f' IHf'].
+  - intros. apply (mod_add_eq _ _ _ _ _ _ H H0).
+  - intros. simpl in H0. destruct (dag.lookup d i) as [ [o args]|] eqn:E1; try apply (mod_add_eq _ _ _ _ _ _ H H0).
+    + destruct o; try apply (mod_add_eq _ _ _ _ _ _ H H0).
+      -- destruct (s <=? s0)%N eqn:E; try apply (mod_add_eq _ _ _ _ _ _ H H0). apply N.leb_le in E. subst.
+         Check collapse_op. apply (collapse_op _ _ _ _ _ _ H) in E1. clear H.
+         generalize dependent n. generalize dependent m. induction args as [| arg args1 IHargs1].
+        ++ intros. simpl in E1. simpl in H0. apply (mod_add_eq' _ _ _ _ _ _ _ E H0 E1).
+        ++ intros. simpl in H0. rewrite map_app in H0. apply break_add_backwards in H0.
+           destruct H0 as [m1 [m2 [H1 [H2 H3] ] ] ]. simpl in E1. rewrite app_is_cons in E1.
+           apply break_add_backwards in E1. destruct E1 as [n1 [n2 [H4 [H5 H6] ] ] ].
+           apply (IHargs1 _ H3 _) in H6. clear H3 IHargs1. injection H4 as H4.
+           injection H1 as H1. subst. apply mod_add_eq_backwards in H5. destruct H5 as [m1_ [H3 H4] ].
+           apply (IHf' _ _ _ H3) in H2. clear IHf' H3. rewrite <- H2. rewrite <- H4.
+           repeat rewrite Z_land_ones'.
+           rewrite <- PullPush.Z.add_mod_l. repeat rewrite Z.add_0_r. rewrite <- PullPush.Z.add_mod_full.
+           repeat rewrite <- Z_land_ones'. rewrite <- Z.land_assoc.
+
+           repeat rewrite Z.land_ones_ones.
+           replace (Z.of_N s0 <? 0) with false by lia. replace (Z.of_N s <? 0) with false by lia. simpl.
+           replace (Z.min (Z.of_N s0) (Z.of_N s)) with (Z.of_N s) by lia.
+
+           reflexivity.
+      -- Check collapse_op. apply (collapse_op _ _ _ _ _ _ H) in E1. clear H.
+         generalize dependent n. generalize dependent m. induction args as [| arg args1 IHargs1].
+        ++ intros. simpl in E1. simpl in H0. apply (mod_addZ_eq' _ _ _ _ _ _ H0 E1).
+        ++ intros. simpl in H0. rewrite map_app in H0. apply break_add_backwards in H0.
+           destruct H0 as [m1 [m2 [H1 [H2 H3] ] ] ]. simpl in E1. rewrite app_is_cons in E1.
+           apply break_addZ_backwards in E1. destruct E1 as [n1 [n2 [H4 [H5 H6] ] ] ].
+           apply (IHargs1 _ H3 _) in H6. clear H3 IHargs1. injection H4 as H4.
+           injection H1 as H1. subst. apply mod_addZ_eq_backwards in H5. destruct H5 as [m1_ [H3 H4] ].
+           apply (IHf' _ _ _ H3) in H2. clear IHf' H3. rewrite <- H2. rewrite <- H4.
+           repeat rewrite Z_land_ones'.
+           rewrite <- PullPush.Z.add_mod_l. repeat rewrite Z.add_0_r. rewrite <- PullPush.Z.add_mod_r.
+           reflexivity.
+Qed.
+
+(* Fixpoint bound_expr e : option Z := (* e <= r *)
+  match e with
+  | ExprApp (const v, _) => if Z.leb 0 v then Some v else None
+  | ExprApp (add s, args) =>
+      Some  match Option.List.lift (List.map bound_expr args) with
+            | Some bounds => Z.min (List.fold_right Z.add 0%Z bounds) (Z.ones (Z.of_N s))
+            | None => Z.ones (Z.of_N s)
+            end
+  | ExprApp (selectznz, [c;a;b]) =>
+      match bound_expr a, bound_expr b with
+      | Some a, Some b => Some (Z.max a b)
+      | _, _ => None
+      end
+  | ExprApp (set_slice 0 w, [a;b]) =>
+      match bound_expr a, bound_expr b with
+      | Some a, Some b => Some (Z.lor
+                                  (Z.land (Z.ones (Z.succ (Z.log2 b))) (Z.ones (Z.of_N w)))
+                                  (Z.ldiff (Z.ones (Z.succ (Z.log2 a))) (Z.ones (Z.of_N w))))
+      | _, _ => None
+      end
+  | ExprApp ((old s _ | slice _ s | mul s | shl s | shr s | sar s | neg s | and s | or s | xor s), _) => Some (Z.ones (Z.of_N s))
+  | ExprApp ((addcarry _ | subborrow _ | addoverflow _ | iszero), _) => Some 1
+  | _ => None
+  end%Z.
+
+Definition is_bounded_by (e : expr) (m : Z) : bool :=
+  match bound_expr e with (* we only reveal one layer here.  That could be changed. *)
+  | None => false
+  | Some b => b <=? m
+  end. *)
+(* 
+Lemma eval_list_of_addends' (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
+  forall i n,
+  is_bounded_by (ExprRef i) 
+  eval ctx d (ExprRef i) n ->
+  eval ctx d (ExprApp (add s, map ExprRef (list_of_addends d f s i))) n.
+Proof.
+  induction f as [| f' IHf'].
+  - intros. simpl. apply H.
+  - intros. simpl. (* inversion H; subst. inversion H2; subst. inversion H3; subst. *)
+    destruct (dag.lookup d i) as [ [o args]|] eqn:E1; try apply H.
+    destruct o; try apply H.
+    destruct (s =? s0)%N eqn:E; try apply H. apply N.eqb_eq in E. subst.
+    apply (collapse_addition _ _ _ _ _ _ H) in E1. clear H.
+    generalize dependent n. induction args as [| arg args1 IHargs1].
+    + intros. simpl. simpl in E1. apply E1.
+    + intros. simpl. rewrite map_app. simpl in E1. rewrite app_is_cons in E1.
+      apply break_add_backwards in E1. destruct E1 as [m1 [m2 [E1 [E2 E3] ] ] ].
+      Print break_add. apply (break_add m1 m2 n).
+      -- apply E1.
+      -- apply IHf'. apply E2.
+      -- apply IHargs1. apply E3.
+Qed. *)
+
+(* Lemma evalZ_list_of_addends (ctx : symbol -> option Z) (d : dag) (f : nat) (s : OperationSize):
+  forall i n,
+  eval ctx d (ExprApp (addZ, [ExprRef i])) n ->
+  eval ctx d (ExprApp (addZ, map ExprRef (list_of_addends d f s i))) n.
+Proof.
+  induction f as [| f' IHf'].
+  - intros. simpl. apply H.
+  - intros. simpl. (* inversion H; subst. inversion H2; subst. inversion H3; subst. *)
+    destruct (dag.lookup d i) as [ [o args]|] eqn:E1; try apply H.
+    destruct o; try apply H.
+    destruct (s =? s0)%N eqn:E; try apply H. apply N.eqb_eq in E. subst.
+    apply (collapse_additionZ _ _ _ _ _ H) in E1. clear H.
+    generalize dependent n. induction args as [| arg args1 IHargs1].
+    + intros. simpl. simpl in E1. apply E1.
+    + intros. simpl. rewrite map_app. simpl in E1. rewrite app_is_cons in E1.
+      apply break_add_backwards in E1. destruct E1 as [m1 [m2 [E1 [E2 E3] ] ] ].
+      Print break_add. apply (break_add m1 m2 n).
+      -- apply E1.
+      -- apply IHf'. apply E2.
+      -- apply IHargs1. apply E3.
+Qed. *)
 
 (* Search 
 
@@ -1484,7 +1793,7 @@ inversion H; subst. simpl in H5. inversion H5; subst. inversion H3; subst. inver
     simpl. inversion H; subst. inversion H2; subst. inversion H3; subst. rewrite E1 in H1.
     injection H1 as H1 H1'. subst. simpl in H7. clear H4 H2 H3 H6 E1 l' i H. generalize dependent args'. (* inversion H5; subst. simpl in H7. injection H7 as H7. *)
 
-    induction args as [| arg args' IHargs'].
+    induction args's as [| arg args' IHargs'].
     + simpl. inversion H; subst. inversion H2; subst. inversion H3; subst. rewrite E1 in H1.
       injection H1 as H1 H1'. subst. inversion H5; subst. simpl in H7. injection H7 as H7.
       Search eval. Print eval_node.
@@ -1523,7 +1832,7 @@ Fixpoint withadc_without (d : dag) (s : OperationSize) (args : list idx) : (list
       match o, args'' with
       | addcarry s', (x :: y :: []) => 
         if N.eqb s' s then 
-          ([list_of_addends d (N.to_nat (dag.size d)) s x; list_of_addends d (N.to_nat (dag.size d)) s y] :: withadc', without')
+          (map (list_of_addends d (N.to_nat (dag.size d)) s) [x; y] :: withadc', without')
         else
           (withadc', i :: without')
       | _, _ => (withadc', i :: without')
@@ -1531,6 +1840,8 @@ Fixpoint withadc_without (d : dag) (s : OperationSize) (args : list idx) : (list
     | None => (withadc', i :: without')
     end
   end.
+
+Print interp_op.
 
 Definition keep n x := Z.land x (Z.ones (Z.of_N n)).
 Print Z.shiftr. Print Z.shiftl.
@@ -1540,6 +1851,74 @@ Print expr.
 Definition expr_of_a_carry (s : OperationSize) (carry : list (list idx)) : expr :=
   let with_small_adds := map (fun addends => ExprApp (add s, map ExprRef addends)) carry in
   ExprApp (shrZ, [ExprApp (addZ, with_small_adds); ExprApp (const (Z.of_N s), [])]).
+
+Print interp_op.
+
+(* Lemma eval_expr_of_a_carry ctx d s f arg1 arg2 n1 n2 : 
+  eval ctx d (expr_of_a_carry s (map (list_of_addends d f s) [arg1; arg2])) n1 ->
+  eval ctx d (ExprApp (addcarry s, map (fun i => ExprApp (add s, [ExprRef i])) [arg1; arg2])) n2 ->
+  n1 = n2.
+Proof.
+  simpl. cbv [expr_of_a_carry]. simpl. intros. inv H. inv H0.
+  simpl in H5. destruct args' as [| a [| b [| c] ] ]; try discriminate H5. inv H3.
+  inv H4. inv H1. inv H8. inv H4. inv H9. inv H1. injection H10 as H10; subst. clear H11.
+  inv H12. inv H2. inv H9. inv H10. injection H5 as H5; subst. injection H6 as H6; subst. 
+  injection H7 as H7; subst. Check eval_list_of_addends. apply eval_list_of_addends with (f := f) in H1.
+  apply eval_list_of_addends with (f := f) in H2.
+  Check eval_eval. apply (eval_eval _ _ _ _ H3) in H1. apply (eval_eval _ _ _ _ H2) in H4.
+  subst. rewrite Z.add_0_r. inv H3. clear H1. inv H2. clear H1. Check small_sum. apply small_sum in H5.
+  apply small_sum in H4. repeat rewrite Z.shiftr_div_pow2; try lia. Search (_ + _ <= _ + _)%Z.
+  destruct H5 as [H5' H5]. destruct H4 as [H4' H4]. Check Z.add_le_mono. apply (Z.add_le_mono _ _ _ _ H5) in H4.
+  cbv [Z.ones] in H4. repeat rewrite Z.shiftl_1_l in H4. assert (E : y1 + y0 < 2 * (2 ^ Z.of_N s)) by lia.
+  Check Z.div_lt_upper_bound. assert ((y1 + y0) / 2 ^ Z.of_N s < 2).
+  - apply Z.div_lt_upper_bound; lia.
+  - apply (Z.add_le_mono _ _ _ _ H5') in H4'. Check Z.mod_small.
+    symmetry. apply Z.mod_small. split.
+    + Search Z.div. apply Z.div_pos.
+      -- apply H4'.
+      -- lia.
+    + apply H.
+Qed.
+ *)
+Lemma eval_expr_of_a_carry' ctx d s f arg1 arg2 n1 n2 :
+  eval ctx d (expr_of_a_carry s (map (list_of_addends d f s) [arg1; arg2])) n1 ->
+  eval ctx d (ExprApp (addcarry s, map ExprRef [arg1; arg2])) n2 ->
+  n1 = n2.
+Proof.
+  simpl. cbv [expr_of_a_carry]. simpl. intros. inv H. inv H0.
+  simpl in H5. destruct args' as [| a [| b [| c] ] ]; try discriminate H5. inv H3.
+  inv H4. inv H1. inv H8. inv H4. inv H9. inv H1. injection H10 as H10; subst. clear H11.
+  inv H12. inv H2. inv H9. inv H10. injection H5 as H5; subst. injection H6 as H6; subst. 
+  injection H7 as H7; subst. Check eval_list_of_addends'.
+  remember (eval_list_of_addends' _ _ _ _ _ _ _ H1 H3) as H eqn:E1.
+  remember (eval_list_of_addends' _ _ _ _ _ _ _ H2 H4) as H' eqn:E2.
+  clear E1 E2 H1 H2. inv H3. apply small_sum in H6. clear H2. inv H4. apply small_sum in H3. clear H1.
+  destruct H3 as [H3 H3']. destruct H6 as [H6 H6']. repeat rewrite Z.add_0_r.
+  Check Z.add_le_mono. apply (Z.add_le_mono _ _ _ _ H6') in H3'. clear H6'. cbv [Z.ones] in H3'.
+  repeat rewrite Z.shiftl_1_l in H3'. remember (y1 mod 2 ^ Z.of_N s) as y1'. remember (y2 mod 2 ^ Z.of_N s) as y2'.
+  assert (E : y1' + y2' < 2 * (2 ^ Z.of_N s)) by lia. assert ((y1' + y2') / 2 ^ Z.of_N s < 2).
+  - apply Z.div_lt_upper_bound; lia.
+  - Check Z.add_le_mono. apply (Z.add_le_mono _ _ _ _ H6) in H3. clear H6. Check Z.mod_small. symmetry.
+    Search Z.shiftr.
+    rewrite Z.shiftr_div_pow2 by lia. Search Z.modulo. Search Z.shiftr. subst. Check Z.mod_small.
+    (* replace 2 with (2^1) by reflexivity.  *)Check Z.land_ones. rewrite Z.land_ones by lia.
+    apply Z.mod_small.
+
+ apply eval_list_of_addends with (f := f) in H1.
+  apply eval_list_of_addends with (f := f) in H2.
+  Check eval_eval. apply (eval_eval _ _ _ _ H3) in H1. apply (eval_eval _ _ _ _ H2) in H4.
+  subst. rewrite Z.add_0_r. inv H3. clear H1. inv H2. clear H1. Check small_sum. apply small_sum in H5.
+  apply small_sum in H4. repeat rewrite Z.shiftr_div_pow2; try lia. Search (_ + _ <= _ + _)%Z.
+  destruct H5 as [H5' H5]. destruct H4 as [H4' H4]. Check Z.add_le_mono. apply (Z.add_le_mono _ _ _ _ H5) in H4.
+  cbv [Z.ones] in H4. repeat rewrite Z.shiftl_1_l in H4. assert (E : y1 + y0 < 2 * (2 ^ Z.of_N s)) by lia.
+  Check Z.div_lt_upper_bound. assert ((y1 + y0) / 2 ^ Z.of_N s < 2).
+  - apply Z.div_lt_upper_bound; lia.
+  - apply (Z.add_le_mono _ _ _ _ H5') in H4'. Check Z.mod_small.
+    symmetry. apply Z.mod_small. split.
+    + Search Z.div. apply Z.div_pos.
+      -- apply H4'.
+      -- lia.
+    + apply H.
 
 Definition exprs_of_carries (s : OperationSize) (carries : list (list (list idx))) : list expr :=
   map (expr_of_a_carry s) carries.
@@ -1557,10 +1936,10 @@ Search eval.
 Lemma eval_withadc_without (ctx : symbol -> option Z) (d : dag) (s : OperationSize):
   forall args n a1 a2,
   let (withadc, without) := withadc_without d s args in
-  eval ctx d (ExprApp (addZ, map ExprRef args)) n ->
-  eval ctx d (ExprApp (addZ, map ExprRef without)) a1 ->
-  eval ctx d (ExprApp (addZ, exprs_of_carries s withadc)) a2 ->
-  Z.add a1 a2 = n.
+  eval ctx d (ExprApp (add s, map ExprRef args)) n ->
+  eval ctx d (ExprApp (add s, map ExprRef without)) a1 ->
+  eval ctx d (ExprApp (add s, exprs_of_carries s withadc)) a2 ->
+  interp_op (fun _ => None) (add s) [a1; a2] = Some n.
 Proof.
   intros args. induction args as [| i args'].
   - simpl. intros.
@@ -1573,30 +1952,45 @@ Proof.
   - destruct (withadc_without d s (i :: args')) as [withadc without] eqn:E. simpl in E.
     destruct (withadc_without d s args') as [withadc' without'] eqn:E1.
     intros.
-    assert (Lemma: (withadc, without) = (withadc', i :: without') -> (a1 + a2)%Z = n).
+    assert (Lemma: (withadc, without) = (withadc', i :: without') -> interp_op (fun _=>None) (add s) [a1; a2] = Some n).
     { clear E. intros E. injection E as E E'. rewrite E in *. rewrite E' in *. clear E E'.
-    inversion H. subst. inversion H4. subst.
-         inversion H0. subst. inversion H7. subst.
-         inversion H5; subst. inversion H9; subst.
-         simpl in H6. injection H6 as H6. simpl in H10. injection H10 as H10.
-         rewrite <- H6. rewrite <- H10.
-         rewrite H3 in H14. injection H14 as H14 H14'. subst.
-         assert (E3: args'0 = args'1).
-         { apply (eval_eval_Forall2 _ _ _ _ H11 _ H15). }
-         subst. rewrite H13 in H16. injection H16 as H16. subst.
-         rewrite <- Z.add_assoc. f_equal. apply IHargs'.
-         ++ Print eval. apply (EApp _ _ _ _ _ _ H8). simpl. reflexivity.
-         ++ Print eval. apply (EApp _ _ _ _ _ _ H12). simpl. reflexivity.
-         ++ assumption.
+      
+      rewrite app_is_cons in H. rewrite map_app in H. apply break_add_backwards in H.
+      destruct H as [n_0 [n_1 [H2 [H3 H4] ] ] ]. simpl in H2. injection H2 as H2. subst.
+
+      rewrite app_is_cons in H0. rewrite map_app in H0. apply break_add_backwards in H0.
+      destruct H0 as [a1_0 [a1_1 [H5 [H6 H7] ] ] ]. simpl in H5. injection H5 as H5. subst.
+      
+      simpl. repeat rewrite Z_land_ones'. repeat rewrite Z.add_0_r. f_equal.
+      rewrite <- PullPush.Z.add_mod_l. Check eval_eval. apply (eval_eval _ _ _ _ H3) in H6. clear H3. subst.
+      apply (IHargs' _ _ _ H4 H7) in H1. clear H4 H7. rewrite <- Z.add_assoc. rewrite PullPush.Z.add_mod_full.
+      symmetry. rewrite PullPush.Z.add_mod_full. f_equal. f_equal. simpl in H1. injection H1 as H1.
+      rewrite Z_land_ones' in H1. rewrite Z.add_0_r in H1. subst. rewrite Zmod_mod. reflexivity.
     }
-    destruct (dag.lookup d i) as [ [op op_args]|].
-    + destruct op_args as [| arg1 [| arg2 [| arg3 op_args'] ] ].
+    destruct (dag.lookup d i) as [ [op op_args]|] eqn:E_dlook.
+    + destruct op_args as [| arg1 [| arg2 [| arg3 op_args'] ] ] eqn:E_op_args.
       -- apply Lemma. rewrite <- E. destruct op; reflexivity.
       -- apply Lemma. rewrite <- E. destruct op; reflexivity.
       -- destruct op; try (apply Lemma; rewrite <- E; reflexivity).
-         destruct (s0 =? s)%N eqn:Es.
-         ++ Admitted. 
+         destruct (s0 =? s)%N eqn:Es; destruct (is_bounded_by arg1 (2 ^ Z.of_N s - 1)) eqn:Eb1;
+         destruct (is_bounded_by arg2 (2 ^ Z.of_N s - 1)) eqn:Eb2; try (apply Lemma; rewrite <- E; reflexivity).
+         Check eval_list_of_addends. clear Lemma. injection E as E E_. subst.
+         simpl in H1. rewrite app_is_cons in H1. apply break_add_backwards in H1.
+         destruct H1 as [a2_0 [a2_1 [H1 [H2 H3] ] ] ]. rewrite app_is_cons in H. rewrite map_app in H.
+         apply break_add_backwards in H. destruct H as [n_0 [n_1 [H4 [H5 H6] ] ] ].
+         apply (IHargs' _ _ _ H6 H0) in H3. clear H6 H0. Check list_of_addends. Check eval_expr_of_a_carry. (* now must just show that a2_0 = n_0 *)
+         assert (E : a2_0 = n_0). 
+         ++ Check eval_expr_of_a_carry. apply (eval_expr_of_a_carry ctx d s (N.to_nat (dag.size d)) arg1 arg2 a2_0 n_0).
+          : { simpl. Admitted.
 
+(* Lemma collapse_addition' : 
+
+Check eval_expr_of_a_carry. Check collapse_addition.
+            apply eval_list_of_addends with (f := (N.to_nat (dag.size d))) in H5.
+            cbv-
+ *)
+
+Local Open Scope nat_scope.
 (* 
   destruct (withadc_without d s args) as [withadc without] eqn:E1.
   intros. *)
@@ -1791,7 +2185,7 @@ Fixpoint merge {descr : description} (e : expr) (d : dag) : idx * dag :=
   | ExprApp (op, args) =>
     let idxs_d := List.foldmap merge args d in
     let idxs_d' := 
-                if sum op 
+                if sum op (* can op be addZ?  I think it must be add s *)
                 then standardize_adc_sum (snd idxs_d) (fst idxs_d) 64%N (* FIXME: this 64 should not be hardcoded *)
                 else idxs_d in
     let idxs := if commutative op
@@ -2007,9 +2401,7 @@ Print standardize_adc_sum.
 Print symbol.
 Print eval.
 
-Lemma eval_
-
-Lemma eval_standardize_adc_sum {descr : description}:
+(* Lemma eval_standardize_adc_sum {descr : description}:
   forall G d s, gensym_dag_ok G d ->
   forall op args n, let e := (op, args) in
   eval G d (ExprApp (op, List.map ExprRef args)) n ->
@@ -2020,12 +2412,12 @@ Lemma eval_standardize_adc_sum {descr : description}:
 Proof.
   intros.
 
-
+(* 
 forall idxs o s,
   forall d, gensym_dag_ok G d ->
   sum o = true ->
   
-  gensym_dag_ok G (snd (standardize_adc_sum d idxs s)) /\
+  gensym_dag_ok G (snd (standardize_adc_sum d idxs s)) /\ *)
   
 
 Lemma eval_standardize_adc {descr : description} G :
@@ -2040,7 +2432,7 @@ Proof.
   - destruct (withadc_without d s idxs) as [withadc without] eqn:E1.
     destruct (split_carries d s (merge_carries withadc)) as [standard_withadc d'] eqn:E2.
     simpl. rewrite (sth_about_snd _ _ _ E2). apply gensym_ok_split_carries. apply H1.
-  - 
+  -  *)
 
 Lemma eval_merge {descr:description} G :
   forall e n,
@@ -2050,7 +2442,7 @@ Lemma eval_merge {descr:description} G :
   gensym_dag_ok G (snd (merge e d)) /\
   forall i e', eval G d i e' -> eval G (snd (merge e d)) i e'.
 Proof using Type. Admitted.
-  induction e; intros; eauto; [].
+  (* induction e; intros; eauto; [].
   rename n0 into v.
 
   set (merge _ _) as m; cbv beta iota delta [merge] in m; fold @merge in m.
@@ -2106,7 +2498,7 @@ Proof using Type. Admitted.
     { setoid_rewrite <-H8. setoid_rewrite <-H9. eassumption. }
     rewrite ListUtil.map_nth_default_always. eapply H10. }
   Unshelve. all : constructor.
-Qed.
+Qed. *)
 
 Definition zconst s (z:Z) := const (Z.land z (Z.ones (Z.of_N s)))%Z.
 
@@ -2147,31 +2539,6 @@ Proof using Type.
 Qed.
 
 Local Open Scope Z_scope.
-
-Fixpoint bound_expr e : option Z := (* e <= r *)
-  match e with
-  | ExprApp (const v, _) => if Z.leb 0 v then Some v else None
-  | ExprApp (add s, args) =>
-      Some  match Option.List.lift (List.map bound_expr args) with
-            | Some bounds => Z.min (List.fold_right Z.add 0%Z bounds) (Z.ones (Z.of_N s))
-            | None => Z.ones (Z.of_N s)
-            end
-  | ExprApp (selectznz, [c;a;b]) =>
-      match bound_expr a, bound_expr b with
-      | Some a, Some b => Some (Z.max a b)
-      | _, _ => None
-      end
-  | ExprApp (set_slice 0 w, [a;b]) =>
-      match bound_expr a, bound_expr b with
-      | Some a, Some b => Some (Z.lor
-                                  (Z.land (Z.ones (Z.succ (Z.log2 b))) (Z.ones (Z.of_N w)))
-                                  (Z.ldiff (Z.ones (Z.succ (Z.log2 a))) (Z.ones (Z.of_N w))))
-      | _, _ => None
-      end
-  | ExprApp ((old s _ | slice _ s | mul s | shl s | shr s | sar s | neg s | and s | or s | xor s), _) => Some (Z.ones (Z.of_N s))
-  | ExprApp ((addcarry _ | subborrow _ | addoverflow _ | iszero), _) => Some 1
-  | _ => None
-  end%Z.
 
 Import coqutil.Tactics.Tactics.
 Ltac t:= match goal with
