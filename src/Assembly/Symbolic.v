@@ -3584,7 +3584,25 @@ Definition standardize_adc_sums {descr : description} (d : dag) (idxs : list idx
     standardize_adc_sum (snd lidx_dag) (fst lidx_dag) s in
   fold_right f (idxs, d) (bitwidths_to_standardize d idxs).
 
-Lemma eval_standardize_adc_sums ...
+Lemma eval_standardize_adc_sums {descr : description} ctx d idxs n op :
+  sum op = true ->
+  gensym_dag_ok ctx d ->
+  eval ctx d (ExprApp (op, map ExprRef idxs)) n ->
+  let (idxs', d') := standardize_adc_sums d idxs in
+  eval ctx d' (ExprApp (op, map ExprRef idxs')) n
+  /\ gensym_dag_ok ctx d'
+  /\ forall i e', eval ctx d i e' -> eval ctx d' i e'.
+Proof.
+  intros. destruct (standardize_adc_sums d idxs) as [idxs' d'] eqn:E. cbv [standardize_adc_sums] in E.
+  generalize dependent idxs'. generalize dependent d'.
+  induction (bitwidths_to_standardize d idxs) as [| s l' IHl'].
+  - intros. simpl in E. inv E. auto.
+  - intros. simpl in E. destruct (fold_right _ _ l') as [idxs1 d1]. simpl in E.
+    (* apply (eval_standardize_adc_sum _ _ s _ _ _ H H0) in H1. *) assert (H': (idxs1, d1) = (idxs1, d1)) by reflexivity.
+    apply IHl' in H'. clear IHl'. destruct H' as [H2 [H_ok1 H_eval1] ]. Check eval_standardize_adc_sum. 
+    apply (eval_standardize_adc_sum _ _ s _ _ _ H H_ok1) in H2. rewrite E in H2. clear E H H_ok1.
+    destruct H2 as [H2 [H3 H4] ]. auto.
+Qed.
 
 (* Lemma evals_standardize_adc_sum {descr : description} ctx d s idxs n :
   gensym_dag_ok ctx d ->
@@ -3805,62 +3823,51 @@ Lemma eval_merge {descr:description} G :
   gensym_dag_ok G (snd (merge e d)) /\
   forall i e', eval G d i e' -> eval G (snd (merge e d)) i e'.
 Proof using Type.
-  induction e; intros; eauto; [].
-  rename n0 into v.
-
-  set (merge _ _) as m; cbv beta iota delta [merge] in m; fold @merge in m.
-  destruct n as (op&args).
-  repeat match goal with
-    m := let x := ?A in @?B x |- _ =>
-    let y := fresh x in
-    set A as y;
-    let m' := eval cbv beta in (B y) in
-    change m' in (value of m)
-  end.
-
-  inversion H1; clear H1 ; subst.
-
-  cbn [fst snd] in *. Print merge_node. Print dag.merge_node.
-  assert (gensym_dag_ok G (snd idxs_d) /\
+ intros e. induction e as [i| [o args] IH] (* writing "eqn:E" here screws things up. why? *); intros.
+  - auto.
+  - inv H0. simpl in IH. remember (merge (ExprApp (o, args)) d) as m eqn:Em.
+    simpl in Em. remember (foldmap merge args d) as idxs_d.
+    remember (if (sum o) then _ else _) as idxs_d'.
+    assert (H': gensym_dag_ok G (snd idxs_d) /\
     Forall2 (fun i v => eval G (snd idxs_d) (ExprRef i) v) (fst idxs_d) args' /\
-    forall i e', eval G d i e' -> eval G (snd idxs_d) i e'
-  ) as HH; [|destruct HH as(?&?&?)].
-  { (* clear m idxs H6 v op idxs_d' m idxs;  *)revert dependent d; revert dependent args'.
-    induction H; cbn; intros; inversion H4; subst;
-      split_and; pose proof @Forall2_weaken. typeclasses eauto 8 with core. }
-  clearbody idxs_d.
+    forall i e', eval G d i e' -> eval G (snd idxs_d) i e').
+    { clear n H5. rewrite Heqidxs_d in *. clear Heqidxs_d Heqidxs_d' Em. generalize dependent args'.
+      induction args as [| arg args1 IHargs1].
+      - simpl. subst. simpl. split; auto. split; auto. inv H3. constructor.
+      - intros. inv IH. inv H3.
+        apply (IHargs1 H4) in H7. clear IHargs1 H4. destruct H7 as [H_ok1 [H7 H_eval1] ].
+        simpl. remember ((foldmap merge args1 d)) as idxs_d1. apply H_eval1 in H5.
+        apply (H2 _ _ H_ok1) in H5. clear H2 H_ok1. destruct H5 as [H5 [H_ok' H_eval'] ].
+        split; auto. split; auto. clear H_eval1 H_ok' Heqidxs_d1. constructor.
+        + apply H5.
+        + Search Forall2. apply @Forall2_weaken with (P := (fun (i : idx) (v : Z) => eval G (snd idxs_d1) (ExprRef i) v)).
+          -- intros. apply H_eval'; assumption.
+          -- assumption.
+    }
+    clear args IH H3 Heqidxs_d. destruct H' as [H_ok0 [H0 H_eval0] ].
+    assert (H'': eval G (snd idxs_d) (ExprApp (o, map ExprRef (fst idxs_d))) n).
+    { apply EApp with (args' := args').
+      - Search Forall2. rewrite -> Forall2_map_l. apply H0.
+      - apply H5.
+    }
+    clear H0 H5.
 
-  enough (eval G (snd idxs_d) (ExprApp (op, map ExprRef idxs)) v) by
-    (unshelve (let lem := open_constr:(eval_merge_node _ _ ltac:(eassumption) op idxs v) in
-               edestruct lem as (?&?&?)); eauto); clear m.
-
-  pose proof length_Forall2 H4; pose proof length_Forall2 H2.
-
-  cbn [fst snd] in *; destruct (commutative op) eqn:?; cycle 1; subst idxs.
-
-  { econstructor; eauto.
-    eapply ListUtil.Forall2_forall_iff; rewrite map_length; try congruence; [].
-    intros i Hi.
-    unshelve (epose proof (proj1 (ListUtil.Forall2_forall_iff _ _ _ _ _ _) H2 i _));
-      shelve_unifiable; try congruence; [].
-    rewrite ListUtil.map_nth_default_always. eapply H8. }
-
-  pose proof N.Sort.Permuted_sort (fst idxs_d) as Hperm.
-  eapply (Permutation.Permutation_Forall2 Hperm) in H2.
-  case H2 as (argExprs&Hperm'&H2).
-  eapply permute_commutative in H6; try eassumption; [].
-  epose proof Permutation.Permutation_length Hperm.
-  epose proof Permutation.Permutation_length Hperm'.
-
-  { econstructor; eauto.
-    eapply ListUtil.Forall2_forall_iff; rewrite map_length; try congruence; [|].
-    { setoid_rewrite <-H8. setoid_rewrite <-H9. eassumption. }
-    intros i Hi.
-    unshelve (epose proof (proj1 (ListUtil.Forall2_forall_iff _ _ _ _ _ _) H2 i _));
-      shelve_unifiable; try trivial; [|].
-    { setoid_rewrite <-H8. setoid_rewrite <-H9. eassumption. }
-    rewrite ListUtil.map_nth_default_always. eapply H10. }
-  Unshelve. all : constructor.
+(*  Check Forall2_weaken. apply (Forall2_weaken H_eval0) in H0. *)
+    assert (H''': gensym_dag_ok G (snd idxs_d') /\
+    eval G (snd idxs_d') (ExprApp (o, map ExprRef (fst idxs_d'))) n /\
+    forall i e', eval G d i e' -> eval G (snd idxs_d') i e').
+    { clear Em. destruct (sum o) eqn:Eo.
+      - Check eval_standardize_adc_sums. apply (eval_standardize_adc_sums _ _ _ _ _ Eo H_ok0) in H''.
+        clear Eo H_ok0. rewrite <- Heqidxs_d' in *. clear Heqidxs_d'. destruct idxs_d' as [idxs' d'].
+        simpl. destruct H'' as [H1 [H2 H3] ]. auto.
+      - subst. auto.
+    }
+    clear H_ok0 H_eval0 H'' Heqidxs_d' H. destruct H''' as [H_ok' [H' H_eval'] ]. destruct (commutative o) eqn:Eo.
+    + Check eval_commutative. assert (Hperm: Permutation (map ExprRef (fst idxs_d')) (map ExprRef (N.sort (fst idxs_d')))).
+      { apply Permutation_map. Search N.sort. apply N.Sort.Permuted_sort. }
+      Check eval_commutative. apply (eval_commutative _ _ _ _ _ _ Eo Hperm) in H'. clear Eo Hperm.
+      apply (eval_merge_node _ _ H_ok') in H'. subst. destruct H' as [H1 [H2 H3] ]. auto.
+    + apply (eval_merge_node _ _ H_ok') in H'. subst. destruct H' as [H1 [H2 H3] ]. auto.
 Qed.
 
 Definition zconst s (z:Z) := const (Z.land z (Z.ones (Z.of_N s)))%Z.
