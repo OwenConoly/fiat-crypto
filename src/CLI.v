@@ -474,7 +474,7 @@ Module ForExtraction.
   Definition asm_extra_rewrite_rules_spec : named_argT
     := ([Arg.long_key "extra-rewrite-rule"],
         Arg.String,
-        ["A space-separated list of optional rewriting features of the assembly checker to enable.  Only relevant when --hints-file is specified.  Current options for this argument are: or-to-add."]).
+        ["Enables optional rewriting features of the assembly checker.  Only relevant when --hints-file is specified.  Valid options for this argument are: or-to-add.  To specify multiple optional rules, pass this argument multiple times."]).
   Definition asm_error_on_unique_names_mismatch_spec : named_argT
     := ([Arg.long_key "asm-error-on-unique-name-mismatch"],
         Arg.Unit,
@@ -570,7 +570,7 @@ Module ForExtraction.
       (** assembly convention options *)
       ; assembly_conventions :> assembly_conventions_opt
       (** error if there are un-requested assembly functions *)
-      ; extra_rewrite_rules :> extra_rewrite_rules_opt
+      ; extra_rewrite_rules :> extra_rewrite_rules
       (** optional rewrite rules to be used in assembly equivalence checker *)
       ; error_on_unused_assembly_functions :> error_on_unused_assembly_functions_opt
       (** don't prepend fiat to prefix *)

@@ -807,7 +807,7 @@ Section __.
           {widen_carry : widen_carry_opt}
           {widen_bytes : widen_bytes_opt}
           {assembly_conventions : assembly_conventions_opt}
-          {errules : Assembly.Symbolic.extra_rewrite_rules_opt}
+          {errules : Assembly.Symbolic.extra_rewrite_rules}
           {error_on_unused_assembly_functions : error_on_unused_assembly_functions_opt}
           {ignore_unique_asm_names : ignore_unique_asm_names_opt}
           (n : nat)

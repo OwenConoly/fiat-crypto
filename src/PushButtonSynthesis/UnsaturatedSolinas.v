@@ -106,7 +106,7 @@ Section __.
           {widen_bytes : widen_bytes_opt}
           {tight_upperbound_fraction : tight_upperbound_fraction_opt}
           {assembly_conventions : assembly_conventions_opt}
-          {errules : extra_rewrite_rules_opt}
+          {errules : extra_rewrite_rules}
           {error_on_unused_assembly_functions : error_on_unused_assembly_functions_opt}
           (n : nat)
           (s : Z)
