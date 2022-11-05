@@ -80,6 +80,7 @@ Inductive OpCode :=
 | rcr
 | ret
 | sar
+| sarx
 | sbb
 | setc
 | seto

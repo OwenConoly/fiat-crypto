@@ -157,6 +157,7 @@ Global Instance show_OpCode : Show OpCode
         | rcr => "rcr"
         | ret => "ret"
         | sar => "sar"
+        | sarx => "sarx"
         | sbb => "sbb"
         | setc => "setc"
         | seto => "seto"

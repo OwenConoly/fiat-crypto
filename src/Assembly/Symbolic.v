@@ -86,7 +86,7 @@ Global Instance Show_OperationSize : Show OperationSize := show_N.
 
 Section S.
 Implicit Type s : OperationSize.
-Variant op := old s (_:symbol) | const (_ : Z) | add s | addcarry s | subborrow s | addoverflow s | neg s | shl s | shr s | sar s | rcr s | and s | or s | xor s | slice (lo sz : N) | mul s | set_slice (lo sz : N) | selectznz | iszero (* | ... *)
+Variant op := old s (_:symbol) | const (_ : Z) | add s | addcarry s | subborrow s | addoverflow s | neg s | shl s | shr s | sar s | sarx s | rcr s | and s | or s | xor s | slice (lo sz : N) | mul s | set_slice (lo sz : N) | selectznz | iszero (* | ... *)
   | addZ | mulZ | negZ | shlZ | shrZ | andZ | orZ | xorZ | addcarryZ s | subborrowZ s.
 Definition op_beq a b := if op_eq_dec a b then true else false.
 End S.
@@ -103,6 +103,7 @@ Global Instance Show_op : Show op := fun o =>
   | shl s => "shl " ++ show s
   | shr s => "shr " ++ show s
   | sar s => "sar " ++ show s
+  | sarx s => "sarx " ++ show s
   | rcr s => "rcr " ++ show s
   | and s => "and " ++ show s
   | or s => "or " ++ show s
@@ -136,6 +137,7 @@ Definition show_op_subscript : Show op := fun o =>
   | shl s => "shl" ++ String.to_subscript (show s)
   | shr s => "shr" ++ String.to_subscript (show s)
   | sar s => "sar" ++ String.to_subscript (show s)
+  | sarx s => "sarx" ++ String.to_subscript (show s)
   | rcr s => "rcr" ++ String.to_subscript (show s)
   | and s => "and" ++ String.to_subscript (show s)
   | or s => "or" ++ String.to_subscript (show s)
@@ -5528,6 +5530,12 @@ Definition SymexNormalInstruction {descr:description} {errules : extra_rewrite_r
       _ <- SetFlag CF cf;
       zero <- App (const 0, nil); SetFlag OF zero)
     else ret tt
+  | Syntax.sarx, [dst; src; cnt] =>
+    x <- GetOperand src;
+    let cnt := andZ@(cnt, (PreApp (const (Z.of_N s-1)%Z) nil)) in
+    c <- Symeval cnt;
+    y <- App (sarx s, [x; c]);
+    SetOperand dst y (* sarx is identical to sar, with the addition of the separate src operand, and it leaves the flags alone. *)
   | shrd, [lo as dst; hi; cnt] =>
     let cnt := andZ@(cnt, (PreApp (const (Z.of_N s-1)%Z) nil)) in
     let cnt' := addZ@(Z.of_N s, PreApp negZ [cnt]) in
