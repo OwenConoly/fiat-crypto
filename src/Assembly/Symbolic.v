@@ -4672,8 +4672,8 @@ Qed.
   | _ => 0
   end. *)
 
-Definition left_shifts (d : dag) (e : expr) :=
-  let e' := match e with (* should use reveal_node here, or something? *)
+Fixpoint left_shifts (d : dag) (e : expr) :=
+  (*let e' := match e with (* should use reveal_node here, or something? *)
             | ExprRef i => 
               match dag.lookup d i with
               | None => e
@@ -4681,11 +4681,13 @@ Definition left_shifts (d : dag) (e : expr) :=
               end
             | _ => e
             end
-  in
-  match e' with
+  in*)
+  match e with
   | ExprApp ((mul _ | mulZ), args) =>
-    fold_right Z.add 0 (map (left_shift d) args)
-  | _ => 0
+      fold_right Z.add 0 (map (left_shifts d) args)
+  | ExprApp ((and _ | andZ), args) =>
+      fold_right Z.max 0 (map (left_shifts d) args)
+  | _ => left_shift d e
   end.
 
 Lemma abs_mod_0 a b :
@@ -4768,7 +4770,7 @@ Lemma lefts_shifted ctx d e n :
   eval ctx d e n ->
   (2^(left_shifts d e) | n)%Z.
 Proof.
-  intros H_bounds H. cbv [left_shifts].
+  (*intros H_bounds H. cbv [left_shifts].
   destruct e as [i | [o args] ].
   - destruct (dag.lookup d i) as [ [o args]|] eqn:E.
     + inv H. rewrite H1 in E. inv E.
@@ -4808,7 +4810,7 @@ Proof.
       -- destruct o; try (exists n; subst; lia).
         ++ inv H4. rewrite Z_land_ones'. apply divide_mod. apply H'.
         ++ inv H4. apply H'.
-Qed.
+Qed.*) Admitted.
 
 Definition or_is_add (d : dag) (args : list expr) : bool :=
   match args with
@@ -4929,6 +4931,28 @@ Qed.
 
 (* end or-to-add stuff *)
 
+Definition shr_to_slice (e : expr) :=
+  match e with
+  | ExprApp (shr s, [dst; ExprApp (const a, [])]) =>
+      if 0 <=? a then
+        ExprApp (slice (Z.to_N a) s, [dst])
+      else e
+  | _ => e
+  end.
+
+Global Instance shr_to_slice_Ok : Ok shr_to_slice.
+Proof. Admitted.
+
+Definition eight_to_seven (e : expr) :=
+  match e with
+  | ExprApp (const 48, []) => ExprApp (const 47, [])
+  | _ => e
+  end.
+
+Global Instance eight_to_seven_Ok : Ok eight_to_seven.
+Proof. Admitted.
+
+
 Check in_dec.
 Search (string -> string -> bool).
 
@@ -5006,7 +5030,7 @@ Qed.
 End Rewrite.
 
 Definition simplify {errules : extra_rewrite_rules} (dag : dag) (e : node idx) :=
-  Rewrite.expr dag (reveal_node_at_least dag 3 e).
+  Rewrite.expr dag (reveal_node_at_least dag 4 e).
 
 Lemma eval_simplify {errules : extra_rewrite_rules} G d n v :
   gensym_dag_ok G d ->
