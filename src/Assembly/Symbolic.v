@@ -65,6 +65,7 @@ Require Import Crypto.Util.Tactics.SpecializeBy.
 Require Import Crypto.Util.Tactics.SpecializeAllWays.
 Require Import Crypto.Util.Tactics.SpecializeUnderBindersBy.
 Require Import Crypto.Util.Tactics.Head.
+Require Import Crypto.Util.ZRange.
 Require Import Crypto.Util.ZUtil.Lxor.
 Require Import Crypto.Util.ZUtil.Tactics.RewriteModSmall.
 Require Import Crypto.Util.Tactics.WarnIfGoalsRemain.
@@ -76,11 +77,6 @@ Import ListNotations.
 Definition idx := N.
 Local Set Decidable Equality Schemes.
 Definition symbol := N.
-
-Print fold_left.
-
-Compute (fold_left (fun l x => x :: l) [1;2;3;4;5] []).
-
 Class OperationSize := operation_size : N.
 Global Instance Show_OperationSize : Show OperationSize := show_N.
 
@@ -519,20 +515,21 @@ Global Instance reflect_node_beq {A : Set} {arg_eqb} {H : reflect_rel (@eq A) ar
 Definition keep n x := Z.land x (Z.ones (Z.of_N n)).
 
 Local Open Scope Z_scope.
+Local Open Scope zrange_scope.
 
-Definition in_bounds (x : Z) (r : option (Z*Z)) :=
+Definition in_bounds (x : Z) (r : option zrange) :=
   match r with
   | None => True
-  | Some (min, max) => min <= x <= max
+  | Some r[min~>max] => min <= x <= max
   end.
 
 Ltac inv H := inversion H; subst; clear H.
 
-Definition subset bound1 bound2 := (fst bound2 <=? fst bound1) && (snd bound1 <=? snd bound2).
+Definition subset bound1 bound2 := (bound2 <=? fst bound1) && (snd bound1 <=? snd bound2).
 
 Lemma subset_bounds bounds1 bounds2 :
   subset bounds1 bounds2 = true ->
-  fst bounds2 <= fst bounds1 /\ snd bounds1 <= snd bounds2.
+  lower bounds2 <= fst bounds1 /\ snd bounds1 <= snd bounds2.
 Proof.
   intros. cbv [subset] in H. apply andb_true_iff in H. destruct H as [H1 H2]. apply Z.leb_le in H1. apply Z.leb_le in H2.
   split; assumption.

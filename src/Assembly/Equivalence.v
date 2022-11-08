@@ -1269,8 +1269,6 @@ Definition LoadOutputs {descr:description} {dereference_scalar:bool} {errules : 
            else
              Success (Error (Internal_error_LoadOutputs_length_mismatch outputaddrs output_types), s).
 
-Check SymexLines.
-
 Definition symex_asm_func_M
            {errules : extra_rewrite_rules}
            (dereference_input_scalars:=false)
