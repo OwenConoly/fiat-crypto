@@ -30,8 +30,6 @@ Require Import Crypto.Stringification.Go.
 Require Import Crypto.Stringification.Java.
 Require Import Crypto.Stringification.JSON.
 Require Import Crypto.Stringification.Zig.
-Require Import Coq.QArith.QArith.
-Require Import Coq.QArith.Qround.
 Require Crypto.Util.Arg.
 Import ListNotations. Local Open Scope Z_scope. Local Open Scope string_scope.
 
@@ -87,24 +85,6 @@ Module ForExtraction.
                              then Some 0%nat
                              else parse_nat numv in
                  option_map Auto numv
-            else None
-       end.
-
-  Inductive MaybeNat := 
-  | AutoNat
-  | ActualNat (n : nat).
-
-  Definition parse_maybenat (n : string) : option MaybeNat
-  := match parse_nat n with
-       | Some n => Some (ActualNat n)
-       | None
-         => let idx1 := String.length "(auto" in
-            let autov := substring 0 idx1 n in
-            let numv := substring idx1 (String.length n) n in
-            let numv := substring 0 (String.length numv - 1) numv in
-            let lastch := substring (String.length n - 1) 1 n in
-            if ((lastch =? ")") && (autov =? "(auto"))%string%bool
-            then Some AutoNat
             else None
        end.
 
@@ -363,14 +343,14 @@ Module ForExtraction.
     := ("n",
         Arg.Custom (parse_string_and parse_n) "an ℕ or the literal '(auto)' or '(autoN)' for a non-negative number N",
         ["The number of limbs, or the literal '(auto)' or '(autoN)' for a non-negative number N, to automatically guess the number of limbs"]).
-  Definition n_maybenat_spec : anon_argT
+  Definition n_nat_spec : anon_argT
     := ("n",
-        Arg.Custom (parse_string_and parse_maybenat) "ℕ",
-        ["The number of limbs, or the literal '(auto)' or '(autoN)' for a non-negative number N, to automatically guess the number of limbs"]).
-  Definition limbwidth_maybenat_spec : anon_argT
+        Arg.Custom (parse_string_and parse_nat) "ℕ",
+        ["The number of limbs"]).
+  Definition limbwidth_spec : anon_argT
     := ("limbwidth",
-        Arg.Custom (parse_string_and parse_maybenat) "ℕ",
-        ["The limb width, or the literal '(auto)' or '(autoN)' for a non-negative number N, to automatically guess the limb width"]).
+        Arg.Custom (parse_string_and parse_nat) "ℕ",
+        ["The limb width"]).
   Definition input_magnitude_spec : anon_argT
     := ("input_magnitude",
         Arg.Custom (parse_string_and parse_input_magnitude) "ℕ",
@@ -1091,35 +1071,11 @@ Module ForExtraction.
   End SaturatedSolinas.
 
   Module DettmanMultiplication.
-    Coercion Z.of_nat : nat >-> Z.
-    Coercion inject_Z : Z >-> Q.
-
-    Definition get_n_and_limbwidth (n limbwidth : MaybeNat) (s : Z) (machine_wordsize : Z) : nat * nat :=
-    match n with
-    | ActualNat n' =>
-      match limbwidth with
-      | ActualNat limbwidth' => (n', limbwidth')
-      | AutoNat =>
-        let suggestion := Z.to_nat (Qceiling (s / n')) in (* should this be s + 1?  something else? *)
-        (n', suggestion)
-      end
-    | AutoNat =>
-      match limbwidth with
-      | ActualNat limbwidth' => 
-        let suggestion := Z.to_nat (Qceiling (s / limbwidth')) in
-        (suggestion, limbwidth')
-      | AutoNat =>
-        let n' := Z.to_nat (Qceiling (s / machine_wordsize)) in
-        let limbwidth' := Z.to_nat (Qceiling(s / n')) in
-        (n', limbwidth')
-      end
-    end.
-
     Local Instance api : PipelineAPI
       := {
           spec :=
             {| Arg.named_args := []
-               ; Arg.anon_args := [n_maybenat_spec; limbwidth_maybenat_spec; sc_spec; input_magnitude_spec]
+               ; Arg.anon_args := [n_nat_spec; limbwidth_spec; sc_spec; input_magnitude_spec]
                ; Arg.anon_opt_args := []
                ; Arg.anon_opt_repeated_arg := Some (function_to_synthesize_spec DettmanMultiplication.valid_names) |};
 
@@ -1127,7 +1083,6 @@ Module ForExtraction.
           := let '(tt, ((str_n, n), (str_limbwidth, limbwidth), (str_sc, (s, c)), (str_input_magnitude, input_magnitude)),
                    tt, requests) := args in
              let show_requests := match requests with nil => "(all)" | _ => String.concat ", " requests end in
-             let (n, limbwidth) := get_n_and_limbwidth n limbwidth s machine_wordsize in
              inl ((str_n, str_limbwidth, str_sc, str_input_magnitude, show_requests),
                   (n, limbwidth, s, c, input_magnitude, requests));
 
