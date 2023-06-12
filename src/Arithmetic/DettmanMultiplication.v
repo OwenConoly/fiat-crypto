@@ -3,13 +3,155 @@ Require Import Coq.ZArith.ZArith Coq.micromega.Lia.
 Require Import Coq.Lists.List.
 Require Import Crypto.Arithmetic.ModOps.
 Require Import Coq.QArith.QArith_base Coq.QArith.Qround.
+Require Import Crypto.Util.LetIn.
+Require Import Crypto.Util.Notations.
+Require Import Crypto.BoundsPipeline.
+Require Import Crypto.Language.API.
+
+
+Import
+  Language.Compilers
+    Language.API.Compilers
+    Language.API.Compilers.API.
+Require Import Crypto.Util.Notations.
+
 Local Open Scope list_scope.
 
 Import Associational Positional.
 Import ListNotations. Local Open Scope Z_scope.
 
 Local Coercion Z.of_nat : nat >-> Z.
+Local Coercion Z.to_nat : Z >-> nat.
 
+Module adk_mul.
+  (* this Arbitrary-Degree Karatsuba multiplication uses fewer muls but more adds/subs compared to Associational.mul,
+     as described here: https://eprint.iacr.org/2015/1247.pdf.
+     As the number of limbs increases, the performance of this multiplication improves relative to Associational.mul.
+     As described in the paper, the algorithm is this:
+     xy = \sum_{i = 1}^{n - 1} \sum_{j = 0}^{i - 1} (x_i - x_j)(y_j - y_i) b^{i + j} +
+          \sum_{i = 0}^{n - 1} \sum_{j = 0}^{n - 1} x_j y_j b^{i + j}.
+     Then, as we see in this example
+     (https://github.com/bitcoin-core/secp256k1/blob/9618abcc872a6e622715c4540164cc847b653efb/src/field_10x26_impl.h),
+     the number of adds can be reduced by rewriting the second summation as follows:
+     \sum_{i = 0}^{n - 1} \sum_{j = 0}^{n - 1} x_i y_i b^{i + j} = 
+     \sum_{i = 0}^{2n - 2} b^i \sum_{j = \max(0, i - (n - 1))}^{i} x_j y_j = 
+     \sum_{i = 0}^{2n - 2} b^i ([\sum_{j = 0}^i x_j y_j] - [\sum_{j = 0}^{i - n} x_j y_j]) = 
+     b^{2n - 2} x_{n - 1} y_{n - 1} + 
+                  \sum_{i = 0}^{2n - 3} b^i ([\sum_{j = 0}^i x_j y_j] - [\sum_{j = 0}^{i - n} x_j y_j]).
+     This last formula will be particularly nice if we precompute the values \sum_{j = 0}^i x_j y_j, as i ranges from 0 to n - 1.
+   *)
+
+  Definition nth_reifiable' {X} (n : Z) (l : list X) (default : X) : Z*X :=
+    fold_right (fun next n_nth => (fst n_nth - 1, if (fst n_nth =? 0) then next else (snd n_nth))) (Z.of_nat (length l) - n - 1, default) l.
+  
+  Lemma nth_reifiable'_spec {X} (n : Z) (l : list X) (default : X) :
+    nth_reifiable' n l default = (-n - 1, if 0 <=? n then nth (Z.to_nat n) l default else default).
+  Proof.
+    cbv [nth_reifiable']. generalize dependent n. induction l as [| x l' IHl']; intros n.
+    - simpl. f_equal. destruct (0 <=? n); destruct (Z.to_nat n); reflexivity.
+    - replace (Z.of_nat (length (x :: l')) - n - 1) with
+        (Z.of_nat (length l') - (n - 1) - 1).
+      + simpl. rewrite IHl'. simpl. f_equal; try lia. destruct (_ =? 0) eqn:E1; destruct (0 <=? n - 1) eqn:E2; destruct (0 <=? n) eqn:E3; destruct (Z.to_nat n) eqn:E4; try lia; try reflexivity.
+        f_equal. lia.
+      + replace (length (x :: l')) with (1 + length l')%nat by reflexivity. lia.
+  Qed.
+
+  Definition nth_reifiable {X} (n : nat) (l : list X) (default : X) : X :=
+    snd (nth_reifiable' (Z.of_nat n) l default).
+  
+  Lemma nth_reifiable_spec {X} (n : nat) (l : list X) (default : X) :
+    nth_reifiable n l default = nth n l default.
+  Proof.
+    cbv [nth_reifiable]. rewrite nth_reifiable'_spec. simpl. destruct (_ <=? _) eqn:E; try lia.
+    - rewrite Nat2Z.id. reflexivity.
+    - apply Z.leb_gt in E. lia.
+  Qed.
+
+  Definition nthZ {X} (i : Z) (l : list X) (default : X) : X :=
+    if (Z.of_nat (Z.to_nat i)) =? i then
+      nth_reifiable (Z.to_nat i) l default
+    else
+      default.
+
+  Definition seqZ a b :=
+      map (fun x => Z.of_nat x + a) (seq 0 (Z.to_nat (1 + b - a))).
+
+  Definition rest_of_the_function (weight : nat -> Z) (n : nat) (products f : list Z) := 
+    let high_part : Z*Z := (weight (n - 1) * weight (n - 1), (nthZ (Z.of_nat (n - 1)) products 0)) in
+    let low_part : list (Z*Z) := map (fun i => (weight (Z.to_nat i), (nthZ i f 0) - (nthZ (i - Z.of_nat n) f 0))) (seqZ 0 (2*Z.of_nat n - 3)) in
+    low_part ++ [high_part].
+
+  Definition products (n : nat) (x y : list Z) : list Z :=
+    dlet high_product : Z := (nthZ (Z.of_nat n - 1) x 0) * (nthZ (Z.of_nat n - 1) y 0) in
+        map (fun i => (nthZ i x 0) * (nthZ i y 0)) (seqZ 0 (2*Z.of_nat n - 3)) ++ [high_product].
+
+  (* the function I want to reify. *)
+  Definition second_summation (weight : nat -> Z) (n : nat) (x y : list Z) : list (Z*Z) :=
+    let products := products n x y in
+          (list_rect
+             (fun _ => list Z -> list (Z*Z))
+             (fun f => rest_of_the_function weight n products (rev f))
+             (fun p _ g => fun f' => Let_In (P:=fun _ => _) (((nthZ 0 f' 0) + p) :: f') g) 
+             products) [].
+
+  Definition weight (i : nat) := 2^Z.of_nat i.
+  Check (second_summation weight). (* nat -> list Z -> list Z -> list (Z*Z) *)
+  
+  Fail Compute (ltac:(let r := Reify (second_summation weight) in exact r)).
+  (* The command has indeed failed with message:
+     Uncaught Ltac2 exception:
+     Reification_panic
+       (message:(Invalid non-Abs function reification of _UNBOUND_REL_2 to 
+       ($$_UNBOUND_REL_2)%expr))
+   *)
+
+  
+  (* a simpler reproduction of the problem *)
+
+  (* this one works. *)
+  Definition reifiable_thing : Z :=
+    (list_rect
+       (fun _ => Z -> Z)
+       (fun x => x + 1)
+       (fun p _ g => fun x => g x + p)
+       (@nil Z)) 5.
+
+  Compute (ltac:(let r := Reify reifiable_thing in exact r)).
+
+  (* this one also works. *)
+  Definition another_reifiable_thing : Z :=
+    (list_rect
+       (fun _ => Z)
+       1
+       (fun p _ g => Let_In p (fun x => g))
+       (@nil Z)).
+
+  Compute (ltac:(let r := Reify another_reifiable_thing in exact r)).
+
+  (* this one doesn't work. *)
+  Definition not_reifiable_thing : Z :=
+   (list_rect
+       (fun _ => Z -> Z)
+       (fun f => 5)
+       (fun p _ g => fun p => Let_In p g) 
+       (@nil Z)) 5.
+
+  Fail Compute (ltac:(let r := Reify not_reifiable_thing in exact r)).
+  (* The command has indeed failed with message:
+     Uncaught Ltac2 exception:
+     Reification_panic
+       (message:(Invalid non-Abs function reification of _UNBOUND_REL_2 to 
+       ($$_UNBOUND_REL_2)%expr))
+   *)
+End adk_mul.
+
+Compute (ltac:(let r := Reify (second_summation_simplified_1) in exact r)).
+Compute (ltac:(let r := Reify (second_summation_simplified_2) in exact r)).
+Fail Compute (ltac:(let r := Reify (second_summation_simplified_3) in exact r)).
+Compute (ltac:(let r := Reify (rest_of_the_function) in exact r)).
+
+  Compute (Reify second_summation).
+  
 Module DettmanMultiplication.
   Section DettmanMultiplication.
     Context
