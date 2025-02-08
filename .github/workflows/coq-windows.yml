@@ -43,7 +43,7 @@ jobs:
     - name: Set up OCaml
       uses: ocaml/setup-ocaml@v3
       with:
-        ocaml-compiler: 4.14.2
+        ocaml-compiler: 4.14
     - run: opam install conf-time conf-gcc
     - run: opam install 'ocamlfind>=1.9.7'
     - run: opam pin add --kind=version coq ${{ env.COQ_VERSION }}
