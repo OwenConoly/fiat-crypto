@@ -93,7 +93,11 @@ Global Instance Show_OperationSize : Show OperationSize := show_N.
 Section S.
 Implicit Type s : OperationSize.
 Variant op := old s (_:symbol) | const (_ : Z) | add s | addcarry s | sub s | subborrow s | addoverflow s | neg s | shl s | shr s | sar s | rcr s | and s | or s | xor s | slice (lo sz : N) | mul s | set_slice (lo sz : N) | selectznz | iszero (* | ... *)
-  | addZ | mulZ | negZ | shlZ | shrZ | andZ | orZ | xorZ | addcarryZ s | subborrowZ s.
+  | addZ | mulZ | negZ | shlZ | shrZ | andZ | orZ | xorZ | addcarryZ s | subborrowZ s
+  (* Vector ops: lane-parallel operations on packed vectors.
+     lane_width = bit width of each lane, num_lanes = number of lanes.
+     Each takes 2 args (full vector operands) and produces a full vector result. *)
+  | vadd (lane_width num_lanes : N).
 Definition op_beq a b := if op_eq_dec a b then true else false.
 End S.
 
@@ -129,6 +133,7 @@ Global Instance Show_op : Show op := fun o =>
   | xorZ => "xorZ"
   | addcarryZ s => "addcarryZ " ++ show s
   | subborrowZ s => "subborrowZ " ++ show s
+  | vadd lw nl => "vadd " ++ show lw ++ "x" ++ show nl
   end%string.
 
 Definition show_op_subscript : Show op := fun o =>
@@ -163,6 +168,7 @@ Definition show_op_subscript : Show op := fun o =>
   | xorZ => "xorℤ"
   | addcarryZ s => "addcarryℤ" ++ String.to_subscript (show s)
   | subborrowZ s => "subborrowℤ" ++ String.to_subscript (show s)
+  | vadd lw nl => "vadd" ++ String.to_subscript (show lw) ++ "×" ++ String.to_subscript (show nl)
   end%string.
 
 Module FMapOp.
@@ -345,6 +351,7 @@ Module Export RewritePass.
     | slice_set_slice
     | slice_set_slice_disjoint
     | slice_slice
+    | slice_vadd
     | truncate_small
     | unary_truncate
     | xor_same
@@ -375,6 +382,7 @@ Module Export RewritePass.
         ;slice01_subborrowZ
         ;set_slice_set_slice
         ;slice_slice
+        ;slice_vadd
         ;slice_set_slice
         ;slice_set_slice_disjoint
         ;set_slice0_small
@@ -631,6 +639,22 @@ Section WithContext.
          | _ => None
          end.
 
+  (* Lane-parallel vector interpretation: applies a scalar binary operation
+     independently to each lane of two packed vectors, combining results. *)
+  Fixpoint interp_vector_binop (scalar_op : Z -> Z -> Z) (lane_width : Z)
+    (lane_idx num_remaining : nat) (a b : Z) : Z :=
+    match num_remaining with
+    | O => 0
+    | S n =>
+        let offset := Z.of_nat lane_idx * lane_width in
+        let keep x := Z.land x (Z.ones lane_width) in
+        let la := keep (Z.shiftr a offset) in
+        let lb := keep (Z.shiftr b offset) in
+        let result := keep (scalar_op la lb) in
+        Z.lor (Z.shiftl result offset)
+              (interp_vector_binop scalar_op lane_width (S lane_idx) n a b)
+    end%Z.
+
   (* defines what each op actually does in symbolic computation *)
   Definition interp_op o (args : list Z) : option Z :=
     Eval cbv [invert_Some identity op_to_Z_binop] in
@@ -673,6 +697,7 @@ Section WithContext.
     | shrZ, [a; b] => Some (Z.shiftr a b)
     | addcarryZ s, args => Some (Z.shiftr (List.fold_right Z.add 0 args) (Z.of_N s))
     | subborrowZ s, cons a args' => Some (- Z.shiftr (a - List.fold_right Z.add 0 args') (Z.of_N s))
+    | vadd lw nl, [a; b] => Some (interp_vector_binop Z.add (Z.of_N lw) 0 (N.to_nat nl) a b)
     | _, _ => None
     end%Z.
 
@@ -841,6 +866,7 @@ Section bound_node_via_PHOAS.
        | addcarryZ _
        | subborrowZ _
        | set_slice _ _
+       | vadd _ _
          => None
        end%zrange.
 
@@ -2526,6 +2552,35 @@ Definition slice_slice (d : dag) :=
 Global Instance slice_slice_ok : Ok slice_slice.
 Proof using Type. t. f_equal. Z.bitblast. Qed.
 
+(* Helper: build slice lo lw [v], coalescing nested slices.
+   If v = slice lo2 s2 [e'] and lo+lw <= s2, produce slice (lo2+lo) lw [e'] instead. *)
+Definition coalescing_slice (lo lw : N) (v : expr) : expr :=
+  match v with
+  | ExprApp (slice lo2 s2, [e']) =>
+      if N.leb (lo + lw) s2 then ExprApp (slice (lo2 + lo) lw, [e'])
+      else ExprApp (slice lo lw, [v])
+  | _ => ExprApp (slice lo lw, [v])
+  end%N.
+
+(* Decompose a slice of a vector add into a scalar add of slices.
+   slice lo lw (vadd lw nl [v1; v2]) → add lw [slice lo lw v1; slice lo lw v2]
+   when lo is lane-aligned (lo mod lw = 0) and in range (lo + lw <= lw * nl).
+   Uses coalescing_slice to collapse any nested slice(slice(...)) in the args,
+   since merge doesn't run rewrite passes on subexpressions. *)
+Definition slice_vadd (d : dag) :=
+  fun e => match e with
+    ExprApp (slice lo lw, [ExprApp (vadd lw' nl, [v1; v2])]) =>
+      if N.eqb lw lw' && N.eqb (lo mod lw)%N 0%N && N.leb (lo + lw) (lw' * nl)
+      then ExprApp (add lw, [coalescing_slice lo lw v1; coalescing_slice lo lw v2])
+      else e | _ => e end%bool%N.
+#[local] Instance describe_slice_vadd : description_of Rewrite.slice_vadd
+  := "Decomposes slice of vector add into scalar add of slices".
+Global Instance slice_vadd_ok : Ok slice_vadd.
+Proof using Type.
+  t.
+  (* Need to show: interp_op of add lw on sliced inputs = slice of interp_vector_binop *)
+Admitted.
+
 Definition set_slice_set_slice (d : dag) :=
   fun e => match e with
     ExprApp (set_slice lo1 s1, [ExprApp (set_slice lo2 s2, [x; e']); y]) =>
@@ -3822,6 +3877,7 @@ Definition named_pass (name : RewritePass.rewrite_pass) : dag -> expr -> expr
      | RewritePass.slice_set_slice => slice_set_slice
      | RewritePass.slice_set_slice_disjoint => slice_set_slice_disjoint
      | RewritePass.slice_slice => slice_slice
+     | RewritePass.slice_vadd => slice_vadd
      | RewritePass.truncate_small => truncate_small
      | RewritePass.unary_truncate => unary_truncate
      | RewritePass.xor_same => xor_same
@@ -4305,10 +4361,8 @@ Definition rcrcnt s cnt : Z :=
 
 Module SymbolicVector.
 (* === Vector instruction helpers === *)
-(* These functions implement lane-parallel SIMD operations where the same
-   operation is applied independently to each lane (chunk) of the vector. *)
 
-(* Low-level: Build a single lane computation (slice -> op -> result) *)
+(* Old lane-decomposition approach (kept for instructions without vector ops yet) *)
 Definition make_lane {opts : symbolic_options_computed_opt} {descr : description}
   (v1 v2 : idx) (lane_op : op) (lane_idx : nat) (lane_width : Z) : M idx :=
   let offset := Z.of_nat lane_idx * lane_width in
@@ -4317,25 +4371,24 @@ Definition make_lane {opts : symbolic_options_computed_opt} {descr : description
   App (lane_op, [l1; l2]).
 
 Fixpoint vector_binop_aux {opts : symbolic_options_computed_opt} {descr : description}
-  (v1 v2 : idx) (lane_op : op) (lane_idx : nat) (num_remaining : nat) 
+  (v1 v2 : idx) (lane_op : op) (lane_idx : nat) (num_remaining : nat)
   (lane_width : Z) (acc : idx) : M idx :=
   match num_remaining with
   | O => ret acc
   | S n =>
       lane_val <- make_lane v1 v2 lane_op lane_idx lane_width;
-      new_acc <- App (set_slice (N.of_nat lane_idx * Z.to_N lane_width) (Z.to_N lane_width), 
+      new_acc <- App (set_slice (N.of_nat lane_idx * Z.to_N lane_width) (Z.to_N lane_width),
                       [acc; lane_val]);
       vector_binop_aux v1 v2 lane_op (S lane_idx) n lane_width new_acc
   end.
 
-(* Mid-level: Perform lane-parallel binary operation on two DAG indices *)
 Definition vector_binop_idx {opts : symbolic_options_computed_opt} {descr : description}
   (v1 v2 : idx) (lane_op : op) (num_lanes : nat) (lane_width : Z) : M idx :=
   zero <- App (const 0, []);
   vector_binop_aux v1 v2 lane_op 0 num_lanes lane_width zero.
 
-(* High-level: Complete lane-parallel vector instruction (GetOperand -> compute -> SetOperand).
-   num_lanes is derived from operation_size s and lane_width. *)
+(* Old-style: decompose into per-lane scalar ops. Used for instructions
+   that don't have a dedicated vector op yet. *)
 Definition SymexVectorBinOp {opts : symbolic_options_computed_opt} {descr : description}
   {s : OperationSize} {sa : AddressSize}
   (dst src1 src2 : ARG) (lane_op : op) (lane_width : Z) : M unit :=
@@ -4343,6 +4396,25 @@ Definition SymexVectorBinOp {opts : symbolic_options_computed_opt} {descr : desc
   v1 <- GetOperand src1;
   v2 <- GetOperand src2;
   result <- vector_binop_idx v1 v2 lane_op num_lanes lane_width;
+  SetOperand dst result.
+
+(* New-style: emit a vector op node in the DAG (as a hint for synthesis),
+   then decompose the result into per-lane scalar ops for equivalence checking.
+   Each lane is built via individual App calls so rewrite rules can simplify them.
+   vector_op: constructs the vector op (e.g. vadd).
+   scalar_op: the corresponding scalar op (e.g. add lane_width). *)
+Definition SymexVectorOp {opts : symbolic_options_computed_opt} {descr : description}
+  {s : OperationSize} {sa : AddressSize}
+  (dst src1 src2 : ARG) (vector_op : N -> N -> op) (scalar_op : op)
+  (lane_width_N : N) : M unit :=
+  let num_lanes := N.to_nat (s / lane_width_N)%N in
+  let lane_width := Z.of_N lane_width_N in
+  v1 <- GetOperand src1;
+  v2 <- GetOperand src2;
+  (* Insert the vector op node as a synthesis hint (not used for output) *)
+  _ <- App (vector_op lane_width_N (N.of_nat num_lanes), [v1; v2]);
+  (* Build per-lane scalar results (each App call gets individually simplified) *)
+  result <- vector_binop_idx v1 v2 scalar_op num_lanes lane_width;
   SetOperand dst result.
 End SymbolicVector.
 
@@ -4369,7 +4441,7 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     v <- (App ((slice 0 64), [v]));
     SetOperand (s:=64) dst v
   | vpaddq, [dst; src1; src2] => (* packed add of quadwords - no flags affected *)
-      SymbolicVector.SymexVectorBinOp dst src1 src2 (add 64) 64
+      SymbolicVector.SymexVectorOp dst src1 src2 vadd (add 64) 64%N
   | vpsubq, [dst; src1; src2] => (* packed subtract quadwords *)
       SymbolicVector.SymexVectorBinOp dst src1 src2 (sub 64) 64
   | vpandq, [dst; src1; src2] => (* packed bitwise AND quadwords *)
