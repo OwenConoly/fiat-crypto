@@ -2552,6 +2552,15 @@ Definition slice_slice (d : dag) :=
 Global Instance slice_slice_ok : Ok slice_slice.
 Proof using Type. t. f_equal. Z.bitblast. Qed.
 
+Ltac bool_simpl :=
+    repeat (first [ rewrite !Bool.andb_true_r in *
+                  | rewrite !Bool.orb_false_r in *
+                  | rewrite !Bool.andb_false_r in *
+                  | rewrite !Bool.orb_false_l in *
+                  | rewrite !Bool.andb_true_l in *
+                  | rewrite !Bool.orb_true_l in *
+                  | simpl negb ]).
+
 (* Helper: build slice lo lw [v], coalescing nested slices.
    If v = slice lo2 s2 [e'] and lo+lw <= s2, produce slice (lo2+lo) lw [e'] instead. *)
 Definition coalescing_slice (lo lw : N) (v : expr) : expr :=
@@ -2562,6 +2571,182 @@ Definition coalescing_slice (lo lw : N) (v : expr) : expr :=
   | _ => ExprApp (slice lo lw, [v])
   end%N.
 
+Lemma coalescing_slice_eval G d lo sz e v :
+  gensym_dag_ok G d ->
+  eval G d e v ->
+  eval G d (coalescing_slice lo sz e)
+    (Z.land (Z.shiftr v (Z.of_N lo)) (Z.ones (Z.of_N sz))).
+Proof using Type.
+  intros Hok Heval.
+  cbv [coalescing_slice].
+  (* In most cases coalescing_slice lo sz e = ExprApp(slice lo sz, [e]) *)
+  assert (Hplain : forall e' v', eval G d e' v' ->
+    eval G d (ExprApp (slice lo sz, [e'])) (Z.land (Z.shiftr v' (Z.of_N lo)) (Z.ones (Z.of_N sz)))).
+  { intros. eapply EApp; [econstructor; [eassumption | econstructor] | cbn [interp_op]; reflexivity]. }
+  destruct e; [exact (Hplain _ _ Heval) |].
+  destruct n as [op args].
+  destruct op; try exact (Hplain _ _ Heval).
+  (* only slice case remains *)
+  destruct args; try exact (Hplain _ _ Heval).
+  destruct args; try exact (Hplain _ _ Heval).
+  destruct (N.leb (lo + sz) _) eqn:Hleb; [| exact (Hplain _ _ Heval)].
+  (* coalesced: result is ExprApp(slice (_ + lo) sz, [e']) *)
+  apply N.leb_le in Hleb.
+  inversion Heval; subst.
+  match goal with H : Forall2 _ _ _ |- _ => inversion H; subst end.
+  match goal with H : Forall2 _ _ _ |- _ => inversion H; subst end.
+  match goal with H : interp_op _ (slice _ _) _ = Some _ |- _ =>
+    cbn [interp_op] in H; inversion H; clear H end.
+  eapply EApp.
+  - econstructor; [eassumption | econstructor].
+  - cbn [interp_op]. f_equal. Z.bitblast.
+Qed.
+
+(* Bits of interp_vector_binop outside [lane_idx*lw, (lane_idx+nr)*lw) are zero. *)
+Lemma interp_vector_binop_bounded scalar_op lw lane_idx nr a b n :
+  (0 < lw)%Z -> (0 <= n)%Z ->
+  (n < Z.of_nat lane_idx * lw \/ n >= Z.of_nat (lane_idx + nr) * lw)%Z ->
+  Z.testbit (interp_vector_binop scalar_op lw lane_idx nr a b) n = false.
+Proof using Type.
+  revert lane_idx.
+  induction nr as [|nr' IH]; intros lane_idx Hlw Hn Hrange.
+  - simpl. apply Z.testbit_0_l.
+  - simpl interp_vector_binop.
+    rewrite Z.lor_spec.
+    match goal with |- context [Z.testbit (Z.shiftl ?x _) _] =>
+      assert (Hshiftl : Z.testbit (Z.shiftl x (Z.of_nat lane_idx * lw)) n = false)
+    end.
+    { rewrite Z.shiftl_spec' by lia.
+      rewrite Z.land_spec, Z.testbit_ones_nonneg' by lia.
+      destruct (Z.ltb_spec n 0); [lia |].
+      destruct (Z.ltb_spec (n - Z.of_nat lane_idx * lw) 0); [simpl; ring |].
+      destruct (Z.ltb_spec (n - Z.of_nat lane_idx * lw) lw);
+        [exfalso; lia | simpl; ring]. }
+    rewrite Hshiftl. simpl.
+    apply IH; [lia | lia |].
+    replace (S lane_idx + nr')%nat with (lane_idx + S nr')%nat by lia.
+    destruct Hrange; [left | right]; lia.
+Qed.
+
+(* All bits of interp_vector_binop in a given lane are zero when outside that lane's range. *)
+Lemma interp_vector_binop_zero scalar_op lw lane_idx nr k a b :
+  (0 < lw)%Z ->
+  (k < lane_idx \/ k >= lane_idx + nr)%nat ->
+  Z.land (Z.shiftr (interp_vector_binop scalar_op lw lane_idx nr a b) (Z.of_nat k * lw))
+         (Z.ones lw) = 0.
+Proof using Type.
+  intros Hlw Hrange.
+  apply Z.bits_inj'; intros i Hi.
+  rewrite Z.land_spec, Z.shiftr_spec, Z.testbit_ones_nonneg', Z.bits_0 by lia.
+  destruct (Z.ltb_spec i lw).
+  - rewrite (interp_vector_binop_bounded _ _ lane_idx nr _ _ _ Hlw) by nia.
+    reflexivity.
+  - destruct (Z.testbit _ _), (i <? 0)%Z; reflexivity.
+Qed.
+
+(* Extracting lane k from interp_vector_binop gives the scalar op on that lane. *)
+Lemma interp_vector_binop_extract scalar_op lw lane_idx nr k a b :
+  (0 < lw)%Z ->
+  (lane_idx <= k)%nat ->
+  (k < lane_idx + nr)%nat ->
+  Z.land (Z.shiftr (interp_vector_binop scalar_op lw lane_idx nr a b) (Z.of_nat k * lw))
+         (Z.ones lw)
+  = Z.land (scalar_op (Z.land (Z.shiftr a (Z.of_nat k * lw)) (Z.ones lw))
+                       (Z.land (Z.shiftr b (Z.of_nat k * lw)) (Z.ones lw)))
+           (Z.ones lw).
+Proof using Type.
+  revert lane_idx.
+  induction nr as [|nr' IH]; intros lane_idx Hlw Hle Hlt.
+  - lia.
+  - simpl interp_vector_binop.
+    destruct (Nat.eq_dec k lane_idx).
+    + (* k = lane_idx: this iteration produces the lane we want *)
+      subst k.
+      apply Z.bits_inj'; intros i Hi.
+      rewrite !Z.land_spec.
+      rewrite Z.shiftr_spec by lia.
+      rewrite Z.lor_spec, Z.shiftl_spec by lia.
+      rewrite Z.land_spec.
+      rewrite Z.testbit_ones_nonneg' by lia.
+      destruct (Z.ltb_spec i lw).
+      * (* i < lw: in the lane *)
+        rewrite (interp_vector_binop_bounded _ _ (S lane_idx) nr' _ _ _ Hlw) by nia.
+        destruct (i <? 0)%Z eqn:?; simpl; [lia |].
+        replace (i + Z.of_nat lane_idx * lw - Z.of_nat lane_idx * lw)%Z with i by lia. 
+				rewrite Z.testbit_ones. 2: lia. 
+				destruct (0 <=? i) eqn:?, (i <? lw) eqn:?; 
+				rewrite Heqb0. bool_simpl.
+				all: try lia. reflexivity.
+      * (* i >= lw: masked out *)
+        destruct (i <? 0)%Z eqn:?; simpl; [lia |]. 
+        destruct (Z.testbit _ _), (Z.testbit _ _);  bool_simpl. 
+				all: replace (Z.testbit (Z.ones lw) i) with false
+         by (symmetry; apply Z.ones_spec_high; lia);
+       bool_simpl; reflexivity.
+    + (* k > lane_idx: the lane is in the recursive part *)
+      assert (Hkgt : (lane_idx < k)%nat) by lia.
+      assert (Hshiftl_bit : forall i, 0 <= i ->
+        Z.testbit (Z.shiftl (Z.land (scalar_op (Z.land (Z.shiftr a (Z.of_nat lane_idx * lw)) (Z.ones lw))
+                                                (Z.land (Z.shiftr b (Z.of_nat lane_idx * lw)) (Z.ones lw)))
+                                     (Z.ones lw))
+                             (Z.of_nat lane_idx * lw)) (i + Z.of_nat k * lw) = false).
+      { intros j Hj. rewrite Z.shiftl_spec by lia. rewrite Z.land_spec.
+        rewrite Z.testbit_ones_nonneg' by lia.
+        destruct (Z.ltb_spec (j + Z.of_nat k * lw - Z.of_nat lane_idx * lw) lw);
+          [exfalso; nia |]. bool_simpl. reflexivity. }
+      apply Z.bits_inj'; intros i Hi.
+      rewrite !Z.land_spec.
+      rewrite Z.shiftr_spec by lia.
+      rewrite Z.lor_spec.
+      rewrite Hshiftl_bit by lia.
+      rewrite Z.testbit_ones_nonneg' by lia. bool_simpl. 
+      destruct (Z.ltb_spec i lw); [| destruct (i <? 0)%Z eqn:?; simpl; try reflexivity; try lia].
+      * simpl. destruct (i <? 0)%Z; bool_simpl; try lia. 
+				assert (HIHR := IH (S lane_idx) Hlw ltac:(lia) ltac:(lia)).
+ 				 apply (f_equal (fun x => Z.testbit x i)) in HIHR.
+  			 rewrite Z.land_spec, Z.shiftr_spec, Z.testbit_ones_nonneg' in HIHR by lia.
+				   destruct (i <? lw) eqn:?; [| lia]. 
+					 rewrite Z.land_spec, Z.testbit_ones_nonneg' in HIHR by lia.
+					   destruct (i <? 0) eqn:?; [lia |].
+  destruct (i <? lw) eqn:?; [| lia].
+  bool_simpl. simpl in HIHR. rewrite HIHR. bool_simpl. reflexivity.
+Qed.
+
+
+(* Extracting lane k from a vector binop equals applying the scalar op to
+   the extracted lanes. Requires lo to be lane-aligned and in range. *)
+Lemma interp_vector_binop_slice_lane scalar_op lane_width lo sz a b num_lanes :
+  lane_width > 0 ->
+  sz = Z.to_N lane_width ->
+  (Z.of_N lo) mod lane_width = 0 ->
+  (lo + sz <= sz * num_lanes)%N ->
+  Z.land (scalar_op
+              (Z.land (Z.shiftr a (Z.of_N lo)) (Z.ones (Z.of_N sz)))
+              (Z.land (Z.shiftr b (Z.of_N lo)) (Z.ones (Z.of_N sz))))
+           (Z.ones (Z.of_N sz))
+  = Z.land (Z.shiftr (interp_vector_binop scalar_op lane_width 0 (N.to_nat num_lanes) a b) (Z.of_N lo))
+         (Z.ones (Z.of_N sz)).
+Proof using Type.
+  intros Hlw0 Hsz Hmod Hle.
+  (* Eliminate sz in favor of lane_width *)
+  rewrite Hsz in *. rewrite Z2N.id by lia.
+  (* lo is lane-aligned, so lo = lane_width * k for some k >= 0 *)
+  assert (Hdiv : (lane_width | Z.of_N lo)%Z) by (apply Z.mod_divide; lia).
+  destruct Hdiv as [k Hk].
+  assert (Hk0 : 0 <= k) by nia.
+  (* Rewrite lo in terms of k *)
+  replace (Z.of_N lo) with (Z.of_nat (Z.to_nat k) * lane_width)%Z by lia.
+  (* Apply the extract lemma *)
+  symmetry. apply interp_vector_binop_extract.
+  - lia.
+  - lia.
+  - (* k < num_lanes *)
+    assert (Z.of_N lo + lane_width <= lane_width * Z.of_N num_lanes)%Z by nia.
+    rewrite Hk in H. nia.
+Qed.
+	
+
+
 (* Decompose a slice of a vector add into a scalar add of slices.
    slice lo lw (vadd lw nl [v1; v2]) → add lw [slice lo lw v1; slice lo lw v2]
    when lo is lane-aligned (lo mod lw = 0) and in range (lo + lw <= lw * nl).
@@ -2570,7 +2755,7 @@ Definition coalescing_slice (lo lw : N) (v : expr) : expr :=
 Definition slice_vadd (d : dag) :=
   fun e => match e with
     ExprApp (slice lo lw, [ExprApp (vadd lw' nl, [v1; v2])]) =>
-      if N.eqb lw lw' && N.eqb (lo mod lw)%N 0%N && N.leb (lo + lw) (lw' * nl)
+      if N.eqb lw lw' && N.eqb (lo mod lw)%N 0%N && N.leb (lo + lw) (lw' * nl) && N.ltb 0 lw
       then ExprApp (add lw, [coalescing_slice lo lw v1; coalescing_slice lo lw v2])
       else e | _ => e end%bool%N.
 #[local] Instance describe_slice_vadd : description_of Rewrite.slice_vadd
@@ -2578,8 +2763,16 @@ Definition slice_vadd (d : dag) :=
 Global Instance slice_vadd_ok : Ok slice_vadd.
 Proof using Type.
   t.
-  (* Need to show: interp_op of add lw on sliced inputs = slice of interp_vector_binop *)
-Admitted.
+  - eapply coalescing_slice_eval; eassumption.
+  - eapply coalescing_slice_eval; eassumption.
+  - cbn [fold_right]. f_equal. rewrite Z.add_0_r.
+    apply (interp_vector_binop_slice_lane Z.add (Z.of_N lane_width) lo sz _ _ _); destruct E; destruct H0; destruct H0.
+    + lia.
+    +  rewrite <- H0. lia.
+    + rewrite <- H0.  rewrite <- N2Z.inj_mod. rewrite H5. reflexivity.
+		+ rewrite H0 in *. exact H4.
+Qed.
+
 
 Definition set_slice_set_slice (d : dag) :=
   fun e => match e with
