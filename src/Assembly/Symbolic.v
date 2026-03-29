@@ -352,6 +352,7 @@ Module Export RewritePass.
     | slice_set_slice_disjoint
     | slice_slice
     | slice_vadd
+    | sub_to_add_neg
     | truncate_small
     | unary_truncate
     | xor_same
@@ -386,6 +387,7 @@ Module Export RewritePass.
         ;slice_set_slice
         ;slice_set_slice_disjoint
         ;set_slice0_small
+        ;sub_to_add_neg
         ;shift_to_mul
         ;flatten_associative
         ;consts_commutative
@@ -2505,6 +2507,24 @@ Definition slice0 (d : dag) :=
   := "Merges (slice 0 s) into addZ,mulZ,negZ,shlZ,shrZ,andZ,orZ,xorZ".
 Global Instance slice0_ok : Ok slice0. Proof using Type. t. Qed.
 
+(* Normalizes sub s [a; b] into add s [a; neg s [b]], matching PHOAS representation. *)
+Definition sub_to_add_neg (d : dag) :=
+  fun e => match e with
+    ExprApp (sub s, [a; b]) =>
+      ExprApp (add s, [a; ExprApp (neg s, [b])])
+    | _ => e end.
+#[local] Instance describe_sub_to_add_neg : description_of Rewrite.sub_to_add_neg
+  := "Normalizes sub s [a, b] to add s [a, neg s [b]]".
+Global Instance sub_to_add_neg_ok : Ok sub_to_add_neg.
+Proof using Type. Admitted. 
+	(* t. f_equal. f_equal. *)
+(*   cbn [fold_right]. *)
+(*   rewrite Z.add_0_r. *)
+(*   rewrite !Z.land_ones by lia. *)
+(*   rewrite Zplus_mod_idemp_r. *)
+(*   f_equal. lia. *)
+(* Qed. *)
+
 Definition slice01_addcarryZ (d : dag) :=
   fun e => match e with
     ExprApp (slice 0 1, [(ExprApp (addcarryZ s, args))]) =>
@@ -3628,7 +3648,7 @@ Definition combine_consts_pre (d : dag) : expr -> expr :=
 
 Definition cleanup_combine_consts (d : dag) : expr -> expr :=
   let simp_outside := List.fold_left (fun e f => f e) [flatten_associative d] in
-  let simp_inside := List.fold_left (fun e f => f e) [constprop d;drop_identity d;unary_truncate d;truncate_small d] in
+  let simp_inside := List.fold_left (fun e f => f e) [constprop d;drop_identity d;unary_truncate d;slice0 d;truncate_small d] in
   fun e => simp_outside match e with ExprApp (o, args)  =>
     ExprApp (o, List.map simp_inside args)
                    | _ => e end.
@@ -4071,6 +4091,7 @@ Definition named_pass (name : RewritePass.rewrite_pass) : dag -> expr -> expr
      | RewritePass.slice_set_slice_disjoint => slice_set_slice_disjoint
      | RewritePass.slice_slice => slice_slice
      | RewritePass.slice_vadd => slice_vadd
+     | RewritePass.sub_to_add_neg => sub_to_add_neg
      | RewritePass.truncate_small => truncate_small
      | RewritePass.unary_truncate => unary_truncate
      | RewritePass.xor_same => xor_same
