@@ -1,8 +1,5 @@
-; DEVELOPMENTAL - test file for equivalence checking, will be removed
-;
 ; Scalar field addition for curve25519 (unsaturated solinas, 5 limbs x 64-bit).
-; Loads each limb individually, adds with scalar add, stores back.
-; This is the baseline that the existing equivalence checker handles correctly.
+; Baseline: loads each limb individually, adds with scalar add, stores back.
 
 SECTION .text
 	GLOBAL fiat_25519_add

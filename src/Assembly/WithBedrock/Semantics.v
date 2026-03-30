@@ -456,6 +456,14 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
        st   <- SetOperand stack_addr_size s st rsp rsp';
                SetOperand sa s st dst v
   | nop, [] => Some st
+  | vzeroupper, [] =>
+    let ymm_regs := [ymm0; ymm1; ymm2; ymm3; ymm4; ymm5; ymm6; ymm7;
+                      ymm8; ymm9; ymm10; ymm11; ymm12; ymm13; ymm14; ymm15] in
+    Some (List.fold_left (fun (acc : machine_state) yr =>
+      let v := get_reg acc (VReg yr) in
+      let v' := Z.land v (Z.ones 128) in
+      update_reg_with acc (fun rs => set_reg rs (VReg yr) v')
+    ) ymm_regs st)
   | ret, _ => None (* not sure what to do with this ret, maybe exlude it? *)
     (* catchall for an operator with no operands *)
   | adc, _
@@ -524,6 +532,7 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
   | movups, _
   | neg, _
   | nop, _
+  | vzeroupper, _
   | not, _
   | paddq, _
   | psubq, _

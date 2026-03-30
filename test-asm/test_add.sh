@@ -1,6 +1,5 @@
 #!/bin/bash
-# DEVELOPMENTAL - will be removed
-# Syncs test files to remote, builds and tests scalar + AVX asm against C reference.
+# Syncs test files to remote Linux server, builds and tests scalar + AVX asm against C reference.
 set -e
 REMOTE="aspears@xz.ax"
 DIR="fiat-crypto-test-asm"

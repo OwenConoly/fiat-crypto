@@ -216,6 +216,7 @@ Inductive OpCode :=
 | vpaddd
 | vpsubd
 | vmovdqu   (* Vector move double quadword unaligned *)
+| vzeroupper (* Zero upper 128 bits of all YMM registers *)
 .
 
 Derive OpCode_Listable SuchThat (@FinitelyListable OpCode OpCode_Listable) As OpCode_FinitelyListable.
@@ -314,6 +315,7 @@ Definition accesssize_of_declaration (opc : OpCode) : option AccessSize :=
   | vpaddd
   | vpsubd
   | vmovdqu
+  | vzeroupper
     => None
   end.
 
@@ -382,7 +384,7 @@ Definition standalone_operand_size (x : ARG) : option N :=
 Definition opcode_size (op : OpCode) :=
   match op with
   | seto | setc => Some 8
-  | ret | nop => Some 64 (* irrelevant? *)
+  | ret | nop | vzeroupper => Some 64 (* irrelevant? *)
   | clc => Some 1 (* irrelevant? *)
   | _ => None
   end%N.

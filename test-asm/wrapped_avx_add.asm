@@ -1,5 +1,3 @@
-; DEVELOPMENTAL - test file for AVX equivalence checking, will be removed
-;
 ; Wrapped batched AVX2 field addition for curve25519.
 ; This wraps an ISPC-compiled batched_field_add (which processes 4 field
 ; elements at once using gather/scatter) into a single-element interface

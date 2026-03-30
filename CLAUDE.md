@@ -5,9 +5,16 @@
 
 There are 3 special markdown files in this dir, each with distinct roles.
 
-CLAUDE.md - high level project info, the goal of the project, codebase organization, all time-independent and ideally fully trustworthy. Only update when we make a big change, significant refactor, etc. ask before updating this.
-ACTIVE_CONTEXT.md - working ideas, todos, the state of the project and what to do next. Updated after every task or when we change our plan in any way.
-NOTES.md - random discoveries and patterns that we've discovered, explanations of issues, more detailed info that might be relevant in the future but won't be relevant for every task.
+CLAUDE.md:
+high level project info, the goal of the project, codebase organization, all time-independent and ideally fully trustworthy. Only update when we make a big change, significant refactor, etc. ask before updating this.
+
+ACTIVE_CONTEXT.md:
+Working ideas, todos, the state of the project and what to do next. Updated after every task or when we change our plan in any way.
+Do not change the format of this file. This file should be continuously updated but stay relatively concise and readable. Old issues and completed items should be completely removed. 
+This file is for both me an agents, so clarify who should be working on something if its ambiguous. E.g. proofs are always for me unless otherwise stated.
+
+NOTES.md:
+Random discoveries and patterns that we've discovered, explanations of issues, more detailed info that might be relevant in the future but won't be relevant for every task.
 
 Every high-level agent should read CLAUDE.md and ACTIVE_CONTEXT.md. Subagents which do specific tasks might not need these.
 NOTES.md should only be scraped when we are stuck or need some detailed info, in which case a grep might turn something up. Add to NOTES.md whenever we expend lots of effort to discover something specific that might be relevant later.

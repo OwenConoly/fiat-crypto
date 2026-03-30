@@ -1,5 +1,3 @@
-// DEVELOPMENTAL - will be removed
-//
 // Links against fiat_25519_add from an .asm file and checks it against a+b.
 //
 // nasm -f elf64 simple_avx_add.asm -o avx.o
