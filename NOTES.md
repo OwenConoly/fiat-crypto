@@ -1,7 +1,8 @@
 # Notes
 
-Technical discoveries, debugging notes, and patterns that took effort to figure out.
-
+Majority written by Claude Code. 
+Technical discoveries, debugging notes, and patterns that took effort to figure out. 
+Try to keep this file to information that will be continually relevant, learned patterns about the codebase, etc. NOT just things that are true right now (like a the state of built binaries).
 
 ## YMM set_slice chain depth problem (2026-03-29)
 
@@ -34,4 +35,12 @@ All three were already implemented before we tried simple_avx_add_ymm.asm:
 - vpaddq: SymexVectorOp auto-scales lanes (s/64), YMM = 4 lanes (Symbolic.v:4686)
 - vzeroupper: loops all 16 YMM regs, slices lower 128 (Symbolic.v:4894)
 
-The binary just needed rebuilding — the March 8 binary predated YMM register parsing.
+
+## combine_consts / simp_inside
+
+When debugging rewrite rules that "should fire but don't", check whether the
+expression was created inside `combine_consts` rather than via normal `App` calls.
+`combine_consts` has its own internal simplification pipeline (`simp_inside`) that
+is separate from the main rewrite pass chain. If a new rewrite rule is needed inside
+that pipeline, it must be added to `simp_inside` explicitly (around line 3650 in Symbolic.v).
+The main rewrite passes only fire via `App` -> `simplify`, not via `merge`.

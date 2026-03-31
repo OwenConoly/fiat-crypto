@@ -2812,16 +2812,17 @@ Definition slice_vsub (d : dag) :=
   := "Decomposes slice of vector sub into add of negated slice".
 Global Instance slice_vsub_ok : Ok slice_vsub.
 Proof using Type.
-  t.
+  t; destruct E as [E' E4]; destruct E' as [E'' E3]; destruct E'' as [E1 E2].
   - eapply coalescing_slice_eval; eassumption.
   - eapply coalescing_slice_eval; eassumption.
-  - cbn [fold_right]. f_equal.
-    apply (interp_vector_binop_slice_lane Z.sub (Z.of_N lane_width) lo sz _ _ _); destruct E; destruct H0; destruct H0.
-    + lia.
-    +  rewrite <- H0. lia.
-    + rewrite <- H0.  rewrite <- N2Z.inj_mod. rewrite H5. reflexivity.
-			+ rewrite H0 in *. exact H4.
+  - f_equal. cbn [fold_right]. rewrite Z.add_0_r. 
+	rewrite !Z.land_ones by lia.
+  rewrite Zplus_mod_idemp_r.
+  rewrite Z.add_opp_r.
+  rewrite <- !Z.land_ones by lia.
+  apply (interp_vector_binop_slice_lane Z.sub (Z.of_N lane_width) lo sz _ _ num_lanes); try lia. rewrite <- E1. rewrite <- N2Z.inj_mod by lia. rewrite E2. reflexivity.
 Qed.
+
 
 
 Definition set_slice_set_slice (d : dag) :=
