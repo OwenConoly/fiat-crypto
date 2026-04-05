@@ -356,6 +356,7 @@ Module Export RewritePass.
     | slice_slice
     | slice_vadd
     | slice_vsub
+    | sub_to_add_neg
     | truncate_small
     | unary_truncate
     | xor_same
@@ -391,6 +392,7 @@ Module Export RewritePass.
         ;slice_set_slice_disjoint
         ;slice_set_slice
         ;set_slice0_small
+        ;sub_to_add_neg
         ;shift_to_mul
         ;flatten_associative
         ;consts_commutative
@@ -2512,9 +2514,17 @@ Definition slice0 (d : dag) :=
   := "Merges (slice 0 s) into addZ,mulZ,negZ,shlZ,shrZ,andZ,orZ,xorZ".
 Global Instance slice0_ok : Ok slice0. Proof using Type. t. Qed.
 
-(*   rewrite Zplus_mod_idemp_r. *)
-(*   f_equal. lia. *)
-(* Qed. *)
+(* Normalizes sub s [a; b] into add s [a; neg s [b]], matching PHOAS representation. *)
+Definition sub_to_add_neg (d : dag) :=
+  fun e => match e with
+    ExprApp (sub s, [a; b]) =>
+      ExprApp (add s, [a; ExprApp (neg s, [b])])
+    | _ => e end.
+#[local] Instance describe_sub_to_add_neg : description_of Rewrite.sub_to_add_neg
+  := "Normalizes sub s [a, b] to add s [a, neg s [b]]".
+Global Instance sub_to_add_neg_ok : Ok sub_to_add_neg.
+Proof using Type. Admitted.
+(* TODO: proof for you *)
 
 Definition slice01_addcarryZ (d : dag) :=
   fun e => match e with
@@ -2560,6 +2570,15 @@ Fixpoint peel_disjoint_set_slices (lo1 s1 : N) (inner : expr) (fuel : nat) : exp
     end
   end%N.
 
+
+Lemma peel_disjoint_set_slices_eval G d lo1 s1 inner v fuel :
+  gensym_dag_ok G d ->
+  eval G d (ExprApp (slice lo1 s1, [inner])) v ->
+  eval G d (peel_disjoint_set_slices lo1 s1 inner fuel) v.
+Proof using Type. Admitted.
+(* TODO: stuck on base case — cbn doesn't simplify. Asked Slack. *)
+
+
 Definition slice_set_slice_disjoint (d : dag) :=
   fun e => match e with
     ExprApp (slice lo1 s1, [ExprApp (set_slice lo2 s2, [base; _])]) =>
@@ -2568,9 +2587,7 @@ Definition slice_set_slice_disjoint (d : dag) :=
   := "Simplifies slice through disjoint set_slice layers (recursive for deep chains)".
 Global Instance slice_set_slice_disjoint_ok : Ok slice_set_slice_disjoint.
 Proof using Type. Admitted.
-(* The recursive peel_disjoint_set_slices is correct but the proof is nontrivial.
-   Needs a lemma showing that peeling disjoint set_slice layers preserves the
-   slice value. The old non-recursive version was: t. f_equal. Z.bitblast. Qed. *)
+(* After t, apply peel_disjoint_set_slices_eval with the eval hypothesis. *)
 
 Definition slice_slice (d : dag) :=
   fun e => match e with
@@ -4123,6 +4140,7 @@ Definition named_pass (name : RewritePass.rewrite_pass) : dag -> expr -> expr
      | RewritePass.slice_slice => slice_slice
      | RewritePass.slice_vadd => slice_vadd
      | RewritePass.slice_vsub => slice_vsub
+     | RewritePass.sub_to_add_neg => sub_to_add_neg
      | RewritePass.truncate_small => truncate_small
      | RewritePass.unary_truncate => unary_truncate
      | RewritePass.xor_same => xor_same
@@ -4661,6 +4679,30 @@ Definition SymexVectorOp {opts : symbolic_options_computed_opt} {descr : descrip
   (* Build per-lane scalar results (each App call gets individually simplified) *)
   result <- vector_binop_idx v1 v2 scalar_op num_lanes lane_width;
   SetOperand dst result.
+
+(* Broadcast: replicate a single value across all lanes via set_slice *)
+Fixpoint broadcast_aux {opts : symbolic_options_computed_opt} {descr : description}
+  (lane_val : idx) (lane_idx num_remaining : nat) (lane_width : N) (acc : idx) : M idx :=
+  match num_remaining with
+  | O => ret acc
+  | S n =>
+    new_acc <- App (set_slice (N.of_nat lane_idx * lane_width) lane_width, [acc; lane_val]);
+    broadcast_aux lane_val (S lane_idx) n lane_width new_acc
+  end.
+
+(* Blend: for each lane, pick from v1 or v2 based on immediate mask bit *)
+Fixpoint blend_aux {opts : symbolic_options_computed_opt} {descr : description}
+  (v1 v2 : idx) (mask : Z) (lane_idx num_remaining : nat)
+  (lane_width : N) (acc : idx) : M idx :=
+  match num_remaining with
+  | O => ret acc
+  | S n =>
+    let src := if Z.testbit mask (Z.of_nat lane_idx) then v2 else v1 in
+    lane_val <- App (slice (N.of_nat lane_idx * lane_width) lane_width, [src]);
+    new_acc <- App (set_slice (N.of_nat lane_idx * lane_width) lane_width, [acc; lane_val]);
+    blend_aux v1 v2 mask (S lane_idx) n lane_width new_acc
+  end.
+
 End SymbolicVector.
 
 
@@ -4700,6 +4742,24 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
       SymbolicVector.SymexVectorBinOp dst src1 src2 (add 32) 32
   | vpsubd, [dst; src1; src2] => (* packed subtract doublewords *)
       SymbolicVector.SymexVectorOp dst src1 src2 vsub (sub 32) 32%N
+
+  | vpbroadcastq, [dst; src] => (* broadcast 64-bit value to all qword lanes *)
+    v <- GetOperand (s:=64) src;
+    lane <- App ((slice 0 64), [v]);
+    let num_lanes := N.to_nat (s / 64)%N in
+    zero <- App (const 0, []);
+    result <- SymbolicVector.broadcast_aux lane 0 num_lanes 64%N zero;
+    SetOperand dst result
+
+  | vpblendd, [dst; src1; src2; imm] => (* blend dwords by immediate mask *)
+    v1 <- GetOperand src1;
+    v2 <- GetOperand src2;
+    imm_idx <- GetOperand imm;
+    imm_c <- RevealConst imm_idx;
+    let num_lanes := N.to_nat (s / 32)%N in
+    zero <- App (const 0, []);
+    result <- SymbolicVector.blend_aux v1 v2 imm_c 0 num_lanes 32%N zero;
+    SetOperand dst result
 
   | xchg, [a; b] => (* Note: unbundle when switching from N to Z *)
     va <- GetOperand a;

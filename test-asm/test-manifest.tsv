@@ -1,0 +1,6 @@
+# name	category	expected	binary	curve_name	bitwidth	limbs	prime	operation	asm_file	extra_flags
+avx-xmm-add	xmm	pass	src/ExtractionOCaml/unsaturated_solinas	25519	64	(auto)	2^255 - 19	add	test-asm/simple_avx_add.asm
+avx-ymm-add	ymm	pass	src/ExtractionOCaml/unsaturated_solinas	25519	64	(auto)	2^255 - 19	add	test-asm/simple_avx_add_ymm.asm
+avx-xmm-sub	xmm	pass	src/ExtractionOCaml/unsaturated_solinas	25519	64	(auto)	2^255 - 19	sub	test-asm/simple_avx_sub.asm
+avx-ymm-sub	ymm	pass	src/ExtractionOCaml/unsaturated_solinas	25519	64	(auto)	2^255 - 19	sub	test-asm/simple_avx_sub_ymm.asm
+batch-avx-add	batch	pass	src/ExtractionOCaml/unsaturated_solinas	25519	64	20	2^255 - 19	add	test-asm/batch_avx_add.asm

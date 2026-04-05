@@ -176,6 +176,32 @@ Module SemanticVector.
     v2 <- DenoteOperand sa s st src2;
     let result := vector_binop_values v1 v2 lane_op num_lanes lane_width in
     SetOperand sa s st dst result.
+  (* Broadcast a value to all lanes *)
+  Fixpoint broadcast_aux (v : Z) (lane_idx num_remaining : nat) (lane_width : Z) : Z :=
+    match num_remaining with
+    | O => 0
+    | S n => Z.lor (insert_lane v lane_idx lane_width)
+                   (broadcast_aux v (S lane_idx) n lane_width)
+    end.
+
+  Definition broadcast (v : Z) (num_lanes : nat) (lane_width : Z) : Z :=
+    broadcast_aux v 0 num_lanes lane_width.
+
+  (* Blend two vectors using an immediate mask at given lane width *)
+  Fixpoint blend_aux (v1 v2 : Z) (mask : Z) (lane_idx num_remaining : nat) (lane_width : Z) : Z :=
+    match num_remaining with
+    | O => 0
+    | S n =>
+      let lane_val := if Z.testbit mask (Z.of_nat lane_idx)
+                      then extract_lane v2 lane_idx lane_width
+                      else extract_lane v1 lane_idx lane_width in
+      Z.lor (insert_lane lane_val lane_idx lane_width)
+            (blend_aux v1 v2 mask (S lane_idx) n lane_width)
+    end.
+
+  Definition blend (v1 v2 : Z) (mask : Z) (num_lanes : nat) (lane_width : Z) : Z :=
+    blend_aux v1 v2 mask 0 num_lanes lane_width.
+
 End SemanticVector.
 
 
@@ -286,6 +312,18 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
   | vpsubd, [dst; src1; src2] =>
       SemanticVector.DenoteVectorBinOp sa s st dst src1 src2
         (fun a b => Z.land (a - b) (Z.ones 32)) 8 32
+  | vpbroadcastq, [dst; src] =>
+    v <- DenoteOperand sa 64 st src;
+    let v64 := Z.land v (Z.ones 64) in
+    let num_lanes := N.to_nat (N.div s 64) in
+    let result := SemanticVector.broadcast v64 num_lanes 64 in
+    SetOperand sa s st dst result
+  | vpblendd, [dst; src1; src2; const imm] =>
+    v1 <- DenoteOperand sa s st src1;
+    v2 <- DenoteOperand sa s st src2;
+    let num_lanes := N.to_nat (N.div s 32) in
+    let result := SemanticVector.blend v1 v2 imm num_lanes 32 in
+    SetOperand sa s st dst result
 
   | (sbb | sub) as opc, [dst; src] =>
     c <- (match opc with sbb => get_flag st CF | _ => Some false end);
@@ -533,6 +571,8 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
   | neg, _
   | nop, _
   | vzeroupper, _
+  | vpbroadcastq, _
+  | vpblendd, _
   | not, _
   | paddq, _
   | psubq, _

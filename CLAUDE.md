@@ -12,9 +12,11 @@ ACTIVE_CONTEXT.md:
 Working ideas, todos, the state of the project and what to do next. Updated after every task or when we change our plan in any way.
 Do not change the format of this file. This file should be continuously updated but stay relatively concise and readable. Old issues and completed items should be completely removed. 
 This file is for both me an agents, so clarify who should be working on something if its ambiguous. E.g. proofs are always for me unless otherwise stated.
+DO NOT put random facts, insights, etc in here. those should go in NOTES, and ony if they will be relevant in the future.
 
 NOTES.md:
 Random discoveries and patterns that we've discovered, explanations of issues, more detailed info that might be relevant in the future but won't be relevant for every task.
+DONT put random task-specific planning stuff in NOTES. this is for generally true facts and patterns, not planning. 
 
 Every high-level agent should read CLAUDE.md and ACTIVE_CONTEXT.md. Subagents which do specific tasks might not need these.
 NOTES.md should only be scraped when we are stuck or need some detailed info, in which case a grep might turn something up. Add to NOTES.md whenever we expend lots of effort to discover something specific that might be relevant later.

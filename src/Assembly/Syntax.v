@@ -217,6 +217,8 @@ Inductive OpCode :=
 | vpsubd
 | vmovdqu   (* Vector move double quadword unaligned *)
 | vzeroupper (* Zero upper 128 bits of all YMM registers *)
+| vpbroadcastq (* Broadcast 64-bit value to all lanes *)
+| vpblendd (* Blend packed dwords using immediate mask *)
 .
 
 Derive OpCode_Listable SuchThat (@FinitelyListable OpCode OpCode_Listable) As OpCode_FinitelyListable.
@@ -316,6 +318,8 @@ Definition accesssize_of_declaration (opc : OpCode) : option AccessSize :=
   | vpsubd
   | vmovdqu
   | vzeroupper
+  | vpbroadcastq
+  | vpblendd
     => None
   end.
 

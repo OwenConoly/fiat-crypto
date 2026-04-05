@@ -37,6 +37,7 @@ Require Import Crypto.UnsaturatedSolinasHeuristics.
 Require Import Crypto.PushButtonSynthesis.ReificationCache.
 Require Import Crypto.PushButtonSynthesis.Primitives.
 Require Import Crypto.PushButtonSynthesis.UnsaturatedSolinasReificationCache.
+Require Import Crypto.PushButtonSynthesis.SIMDUnsaturatedSolinas.
 Require Import Crypto.Assembly.Equivalence.
 Import Option.Notations.
 Import ListNotations.
@@ -79,6 +80,7 @@ Local Opaque
       reified_encode_gen
       reified_encode_gen
       reified_zero_gen
+      reified_batched_carry_mul_gen
       reified_one_gen
       reified_eval_gen
       reified_bytes_eval_gen
@@ -352,6 +354,25 @@ Section __.
           (docstring_with_summary_from_lemma!
              (fun fname : string => [text_before_function_name ++ fname ++ " multiplies two field elements and reduces the result."]%string)
              (carry_mul_correct weightf n m tight_bounds loose_bounds)).
+
+  Local Notation batch_loose_bounds := (loose_bounds ++ loose_bounds ++ loose_bounds ++ loose_bounds) (only parsing).
+  Local Notation batch_tight_bounds := (tight_bounds ++ tight_bounds ++ tight_bounds ++ tight_bounds) (only parsing).
+
+  Definition batch_carry_mul
+    := Pipeline.BoundsPipeline
+         false (* subst01 *)
+         possible_values
+         (reified_batched_carry_mul_gen
+            @ GallinaReify.Reify (Qnum limbwidth) @ GallinaReify.Reify (Z.pos (Qden limbwidth)) @ GallinaReify.Reify s @ GallinaReify.Reify c @ GallinaReify.Reify n @ GallinaReify.Reify idxs)
+         (Some batch_loose_bounds, (Some batch_loose_bounds, tt))
+         (Some batch_tight_bounds).
+
+  Definition sbatch_carry_mul (prefix : string)
+    : string * (Pipeline.M (Pipeline.ExtendedSynthesisResult _))
+    := Eval cbv beta in
+        FromPipelineToString!
+          machine_wordsize prefix "batch_carry_mul" batch_carry_mul
+          (fun fname _ _ => [text_before_function_name ++ fname ++ " performs 4 independent field multiplications with carry reduction."]%string).
 
   Definition carry_square
     := Pipeline.BoundsPipeline
@@ -951,6 +972,7 @@ Section __.
 
     Definition known_functions
       := [("carry_mul", wrap_s scarry_mul);
+            ("batch_carry_mul", wrap_s sbatch_carry_mul);
             ("carry_square", wrap_s scarry_square);
             ("carry", wrap_s scarry);
             ("add", wrap_s sadd);
