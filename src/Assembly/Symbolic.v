@@ -2523,8 +2523,14 @@ Definition sub_to_add_neg (d : dag) :=
 #[local] Instance describe_sub_to_add_neg : description_of Rewrite.sub_to_add_neg
   := "Normalizes sub s [a, b] to add s [a, neg s [b]]".
 Global Instance sub_to_add_neg_ok : Ok sub_to_add_neg.
-Proof using Type. Admitted.
-(* TODO: proof for you *)
+Proof using Type. t. f_equal. Z.bitblast. simpl. repeat rewrite andb_true_r. rewrite Z.add_0_r. 
+rewrite Z.land_ones by lia.
+  rewrite <- Z.add_opp_r.
+  symmetry.
+  rewrite <- (Z.mod_pow2_bits_low (y + - y0) (Z.of_N s) i) by lia.
+  rewrite <- (Z.mod_pow2_bits_low (y + (- y0 mod 2 ^ Z.of_N s)) (Z.of_N s) i) by lia.
+  f_equal. rewrite Zplus_mod_idemp_r. reflexivity.
+Qed. 
 
 Definition slice01_addcarryZ (d : dag) :=
   fun e => match e with
@@ -2557,7 +2563,7 @@ Proof using Type. t. f_equal. Z.bitblast. Qed.
 
 (* Recursively peel disjoint set_slice layers. Needed for YMM (4-lane) operations
    where set_slice chains are 3 deep and a single peel isn't enough. *)
-Fixpoint peel_disjoint_set_slices (lo1 s1 : N) (inner : expr) (fuel : nat) : expr :=
+Fixpoint peel_disjoint_set_slices (lo1 s1 : N) (inner : expr) (fuel : nat) {struct fuel} : expr :=
   match fuel with
   | O => ExprApp (slice lo1 s1, [inner])
   | S fuel' =>
@@ -2575,8 +2581,24 @@ Lemma peel_disjoint_set_slices_eval G d lo1 s1 inner v fuel :
   gensym_dag_ok G d ->
   eval G d (ExprApp (slice lo1 s1, [inner])) v ->
   eval G d (peel_disjoint_set_slices lo1 s1 inner fuel) v.
-Proof using Type. Admitted.
-(* TODO: stuck on base case — cbn doesn't simplify. Asked Slack. *)
+Proof using Type. 
+			intros. generalize dependent inner. induction fuel; intros inner H0. 
+			- unfold peel_disjoint_set_slices. exact H0.
+			- cbn [peel_disjoint_set_slices]. destruct inner. 
+				{ exact H0. }
+				{ destruct n. destruct o; try exact H0. 
+					destruct l as [| base l']. (* [] vs base :: l' *)
+					  - exact H0. (* [] case *)
+						- destruct l' as [| val l'']. (* [base] vs base :: val :: l'' *)
+    				+ exact H0. (* [base] case *)
+    				+ destruct l'' as [| ? l''']; try exact H0. (* [base; val] vs 3+ elements *)
+      * destruct ((lo1 + s1 <=? lo)%N || (lo + sz <=? lo1)%N) eqn:Hdisj; try exact H0.
+	 apply Bool.orb_true_iff in Hdisj. destruct Hdisj as [Hdisj | Hdisj]; apply N.leb_le in Hdisj. apply IHfuel. t. f_equal. Z.bitblast. 
+	 apply IHfuel. t. f_equal. Z.bitblast.
+	 }  
+Qed.
+
+			
 
 
 Definition slice_set_slice_disjoint (d : dag) :=
@@ -2586,8 +2608,7 @@ Definition slice_set_slice_disjoint (d : dag) :=
 #[local] Instance describe_slice_set_slice_disjoint : description_of Rewrite.slice_set_slice_disjoint
   := "Simplifies slice through disjoint set_slice layers (recursive for deep chains)".
 Global Instance slice_set_slice_disjoint_ok : Ok slice_set_slice_disjoint.
-Proof using Type. Admitted.
-(* After t, apply peel_disjoint_set_slices_eval with the eval hypothesis. *)
+Proof using Type. t. apply peel_disjoint_set_slices_eval. exact H. t. f_equal. Z.bitblast. Qed.
 
 Definition slice_slice (d : dag) :=
   fun e => match e with
