@@ -1,4 +1,12 @@
-(** * SIMD Batching Transformation *)
+(** * SIMD Batching Transformation — ARCHIVED / EXPERIMENTAL *)
+(** This file attempts a generic PHOAS-level batching transformation
+    ([BatchExpr]) that lifts any scalar expression to a list-mapped version.
+    It has NOT been validated through BoundsPipeline or the equivalence checker.
+    Uses an [Axiom todo] for unsupported higher-order cases.
+
+    For working batched specs, use the manual definitions in
+    [SIMDUnsaturatedSolinas.v] (e.g. [batched_addmod], [batched_submod],
+    [batched_carry_mulmod]) which are reified and pipeline-tested. *)
 From Coq Require Import List.
 From Coq Require Import ZArith.
 Require Import Crypto.Language.API.

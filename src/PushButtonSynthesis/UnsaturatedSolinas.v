@@ -374,6 +374,38 @@ Section __.
           machine_wordsize prefix "batch_carry_mul" batch_carry_mul
           (fun fname _ _ => [text_before_function_name ++ fname ++ " performs 4 independent field multiplications with carry reduction."]%string).
 
+  Definition batch_add
+    := Pipeline.BoundsPipeline
+         true (* subst01 *)
+         possible_values
+         (reified_batched_add_gen
+            @ GallinaReify.Reify (Qnum limbwidth) @ GallinaReify.Reify (Z.pos (Qden limbwidth)) @ GallinaReify.Reify n)
+         (Some batch_tight_bounds, (Some batch_tight_bounds, tt))
+         (Some batch_loose_bounds).
+
+  Definition sbatch_add (prefix : string)
+    : string * (Pipeline.M (Pipeline.ExtendedSynthesisResult _))
+    := Eval cbv beta in
+        FromPipelineToString!
+          machine_wordsize prefix "batch_add" batch_add
+          (fun fname _ _ => [text_before_function_name ++ fname ++ " performs 4 independent field additions."]%string).
+
+  Definition batch_sub
+    := Pipeline.BoundsPipeline
+         true (* subst01 *)
+         possible_values
+         (reified_batched_sub_gen
+            @ GallinaReify.Reify (Qnum limbwidth) @ GallinaReify.Reify (Z.pos (Qden limbwidth)) @ GallinaReify.Reify n @ GallinaReify.Reify balance)
+         (Some batch_tight_bounds, (Some batch_tight_bounds, tt))
+         (Some batch_loose_bounds).
+
+  Definition sbatch_sub (prefix : string)
+    : string * (Pipeline.M (Pipeline.ExtendedSynthesisResult _))
+    := Eval cbv beta in
+        FromPipelineToString!
+          machine_wordsize prefix "batch_sub" batch_sub
+          (fun fname _ _ => [text_before_function_name ++ fname ++ " performs 4 independent field subtractions."]%string).
+
   Definition carry_square
     := Pipeline.BoundsPipeline
          false (* subst01 *)
@@ -973,6 +1005,8 @@ Section __.
     Definition known_functions
       := [("carry_mul", wrap_s scarry_mul);
             ("batch_carry_mul", wrap_s sbatch_carry_mul);
+            ("batch_add", wrap_s sbatch_add);
+            ("batch_sub", wrap_s sbatch_sub);
             ("carry_square", wrap_s scarry_square);
             ("carry", wrap_s scarry);
             ("add", wrap_s sadd);

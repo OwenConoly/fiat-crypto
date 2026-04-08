@@ -4472,9 +4472,12 @@ Definition GetReg {opts : symbolic_options_computed_opt} {descr:description} r :
   App ((slice lo sz), [v]).
 Definition SetReg {opts : symbolic_options_computed_opt} {descr:description} r (v : idx) : M unit :=
   let '(rn, lo, sz) := index_and_shift_and_bitcount_of_reg r in (* sz is the size of the register, not the value *)
-  old <- GetRegFull rn;
-  v <- App ((set_slice lo sz), [old; v]);
-  SetRegFull rn v.
+  if (N.eqb lo 0) && (N.eqb sz (widest_reg_size_of r))
+  then v <- App (slice 0 sz, [v]);
+       SetRegFull rn v
+  else old <- GetRegFull rn;
+       v <- App ((set_slice lo sz), [old; v]);
+       SetRegFull rn v.
 
 Class AddressSize := address_size : OperationSize.
 Definition Address {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (a : MEM) : M idx :=

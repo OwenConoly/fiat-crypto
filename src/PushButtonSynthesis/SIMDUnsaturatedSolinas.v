@@ -1,7 +1,8 @@
 (** * Batched Unsaturated Solinas: Reification Cache + Pipeline *)
-(** Defines [batched_carry_mulmod]: apply [carry_mulmod] independently
-    to 4 slices of flat input lists. Reifies it for use with
-    [BoundsPipeline] and the equivalence checker. *)
+(** Defines batched versions of primitives: apply the scalar operation
+    independently to 4 slices of flat input lists. Each slice has [n]
+    elements; inputs/outputs are flat lists of [4*n] elements.
+    Reifies each for use with [BoundsPipeline] and the equivalence checker. *)
 From Coq Require Import ZArith List.
 From Coq Require Import Derive.
 Require Import Crypto.Arithmetic.Core.
@@ -29,8 +30,6 @@ Section batched_ops.
           (Hc : length c = len_c)
           (Hidxs : length idxs = len_idxs).
 
-  (** Apply [carry_mulmod] independently to 4 slices of the input lists.
-      Each slice has [n] elements. Inputs/outputs are flat lists of [4*n] elements. *)
   Definition batched_carry_mulmod (a b : list Z) : list Z :=
     carry_mulmod limbwidth_num limbwidth_den s c n idxs
       (firstn n a) (firstn n b) ++
@@ -39,6 +38,28 @@ Section batched_ops.
     carry_mulmod limbwidth_num limbwidth_den s c n idxs
       (firstn n (skipn (n+n) a)) (firstn n (skipn (n+n) b)) ++
     carry_mulmod limbwidth_num limbwidth_den s c n idxs
+      (firstn n (skipn (n+n+n) a)) (firstn n (skipn (n+n+n) b)).
+
+  Definition batched_addmod (a b : list Z) : list Z :=
+    addmod limbwidth_num limbwidth_den n
+      (firstn n a) (firstn n b) ++
+    addmod limbwidth_num limbwidth_den n
+      (firstn n (skipn n a)) (firstn n (skipn n b)) ++
+    addmod limbwidth_num limbwidth_den n
+      (firstn n (skipn (n+n) a)) (firstn n (skipn (n+n) b)) ++
+    addmod limbwidth_num limbwidth_den n
+      (firstn n (skipn (n+n+n) a)) (firstn n (skipn (n+n+n) b)).
+
+  Context (balance : list Z).
+
+  Definition batched_submod (a b : list Z) : list Z :=
+    submod limbwidth_num limbwidth_den n balance
+      (firstn n a) (firstn n b) ++
+    submod limbwidth_num limbwidth_den n balance
+      (firstn n (skipn n a)) (firstn n (skipn n b)) ++
+    submod limbwidth_num limbwidth_den n balance
+      (firstn n (skipn (n+n) a)) (firstn n (skipn (n+n) b)) ++
+    submod limbwidth_num limbwidth_den n balance
       (firstn n (skipn (n+n+n) a)) (firstn n (skipn (n+n+n) b)).
 End batched_ops.
 
@@ -55,3 +76,31 @@ Hint Immediate reified_batched_carry_mul_gen_correct_proj2 : wf_gen_cache.
 #[global]
 Hint Rewrite reified_batched_carry_mul_gen_correct_proj1 : interp_gen_cache.
 Local Opaque reified_batched_carry_mul_gen.
+
+Derive reified_batched_add_gen
+       SuchThat (is_reification_of reified_batched_add_gen batched_addmod)
+       As reified_batched_add_gen_correct.
+Proof. Time cache_reify (). Time Qed.
+Local Definition reified_batched_add_gen_correct_proj1 := proj1 reified_batched_add_gen_correct.
+Local Definition reified_batched_add_gen_correct_proj2 := proj2 reified_batched_add_gen_correct.
+#[global]
+Hint Extern 1 (_ = _) => apply_cached_reification batched_addmod reified_batched_add_gen_correct_proj1 : reify_cache_gen.
+#[global]
+Hint Immediate reified_batched_add_gen_correct_proj2 : wf_gen_cache.
+#[global]
+Hint Rewrite reified_batched_add_gen_correct_proj1 : interp_gen_cache.
+Local Opaque reified_batched_add_gen.
+
+Derive reified_batched_sub_gen
+       SuchThat (is_reification_of reified_batched_sub_gen batched_submod)
+       As reified_batched_sub_gen_correct.
+Proof. Time cache_reify (). Time Qed.
+Local Definition reified_batched_sub_gen_correct_proj1 := proj1 reified_batched_sub_gen_correct.
+Local Definition reified_batched_sub_gen_correct_proj2 := proj2 reified_batched_sub_gen_correct.
+#[global]
+Hint Extern 1 (_ = _) => apply_cached_reification batched_submod reified_batched_sub_gen_correct_proj1 : reify_cache_gen.
+#[global]
+Hint Immediate reified_batched_sub_gen_correct_proj2 : wf_gen_cache.
+#[global]
+Hint Rewrite reified_batched_sub_gen_correct_proj1 : interp_gen_cache.
+Local Opaque reified_batched_sub_gen.

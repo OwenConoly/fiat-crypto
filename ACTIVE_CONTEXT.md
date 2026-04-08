@@ -6,21 +6,18 @@ This file is for both me an agents, so clarify who should be working on somethin
 # Current Focus
 The high level of what we are currently working on.
 
-- Extending equivalence checker to handle more AVX primitives beyond add/sub.
+- Carry_mul equivalence checking now works (scalar and batched). Next: vectorized carry_mul using AVX2 instructions.
 - Building out a test suite of AVX assembly programs to drive incremental instruction/rewrite rule support.
-- Determining the placement of the Batching Transformation in the synthesis pipeline.
+- Adding symex for vector instructions needed by a true AVX2 carry_mul (vpmuludq, vpsrlq, vpsllq, etc.).
 
 
 # Recent Updates
-What we've thought about or accomplished recently, as far as it's relevant to moving forward.
+What we've thought about or accomplished recently, as far as it's relevant to moving forward. Mention specific files edited.
 
-- **Vectorize.v synthesis PoC PASSES**: `src/Assembly/Vectorize.v` synthesizes AVX2 assembly from scalar op specs. `vectorized_add "fiat_25519_add" 5` generates 5× vpaddq on YMM regs. The generated assembly passes the equivalence checker (`n=20` trick). This is the first step toward automated scalar→vector assembly synthesis in Coq.
-- **Batched add PoC PASSES**: `test-asm/batch_avx_add.asm` — hand-written version also passes. Both hand-written and synthesized produce identical logic.
-- **Batched carry_mul pipeline**: `batched_carry_mulmod` in `SIMDUnsaturatedSolinas.v` applies `carry_mulmod` to 4 independent slices. Reification succeeded (~7s). Pipeline def + registration added to `UnsaturatedSolinas.v`.
-- Set up unified test suite: `test-asm/run-tests.sh` + `test-asm/test-manifest.tsv`. 5 tests (add/sub × xmm/ymm + batch add).
-- Added `vpbroadcastq` and `vpblendd` (all three files: Syntax, Semantics, Symbolic). These were needed for ymm sub.
-- Re-added `sub_to_add_neg` rewrite rule (was removed in `1843b077`, which broke xmm sub equivalence).
-- Proved all rewrite rule lemmas in Symbolic.v
+- **Batched carry_mul equivalence check PASSES**: `test-asm/batch_avx_carry_mul.asm` inlines 4 sequential copies of the scalar carry_mul body (from `fiat-amd64/`) with AoS memory offsets (+0x28 per element). Requires `--no-wide-int --shiftr-avoid-uint1 --tight-bounds-mul-by 1.000001` flags (same as the Makefile.test-amd64-files.mk tests). Scalar carry_mul also passes with these flags.
+- **Scalar carry_mul was broken** by an old SetReg change; now fixed. The `slice0` rewrite rule (`slice 0 s (mulZ ...) → mul s ...`) is essential for matching PHOAS mulZ with assembly's mulx output.
+- **8 tests pass**: add/sub × xmm/ymm + batch_add + batch_sub + scalar_carry_mul + batch_carry_mul.
+- Files edited: `test-asm/batch_avx_carry_mul.asm` (new), `test-asm/test-manifest.tsv` (added 2 entries).
 ------------------------------------------------------
 
 
@@ -35,8 +32,9 @@ These are the bugs/specific issues that we need to resolve to move forward.
 # Next Steps
 What to do immediately, in order of priority.
 
-- Extend Vectorize.v: test `vectorized_sub` through the equivalence checker (needs underflow constants from the spec)
-- Generalize Vectorize.v: support more ops, eventually handle carry_mul decomposition (mulhuu → vpmuludq combinations)
-- Once binary builds: generate batched carry_mul C code, verify it's 4× the scalar version
-- Write scalar assembly for batched carry_mul (4 independent carry_muls), test equivalence check
-- Generalize the batching pattern: make `batched_X` work for any operation, not just carry_mul
+- Write a true AVX2 vectorized carry_mul (using vpmuludq, vpsrlq, vpsllq etc. instead of scalar mulx). This requires:
+  1. Adding symex for vpmuludq, vpsrlq, vpsllq to Symbolic.v (+ Syntax.v, Semantics.v)
+  2. Writing the vectorized assembly
+  3. Possibly new rewrite rules if the DAG structures don't match
+- Generalize the batching pattern: make `batched_X` easy to add for any operation
+- The current batch_avx_carry_mul.asm is 4 sequential scalar copies — not actually vectorized. It proves the spec works; next step is real SIMD.

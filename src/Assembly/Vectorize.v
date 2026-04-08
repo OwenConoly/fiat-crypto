@@ -1,4 +1,5 @@
 (** * Scalar → Vector Assembly Synthesis *)
+(** THIS IS BEING REFACTORED AND PROBABLY WILL BE COMPELTELY REMOVED. *)
 (** Given a scalar element-wise primitive (like [add] or [sub]),
     synthesize AVX2 assembly that performs 4 independent copies
     in parallel using YMM registers (4 × 64-bit lanes).
@@ -46,14 +47,32 @@ Definition nth_ymm (i : nat) : VREG :=
 
 (** ** Per-limb code generation *)
 
-(** A [limb_op] describes what to do for one limb position. *)
+(** A [limb_op] describes what to do for one group (YMM register). *)
 Inductive limb_op :=
   | LimbBinop (oc : OpCode)
       (** [dst = oc(arg1[i], arg2[i])] — e.g. vpaddq *)
   | LimbConstBinop (oc : OpCode) (c : Z)
-      (** [dst = oc(arg1[i] + c, arg2[i])] — e.g. sub with underflow constant *).
+      (** [dst = oc(arg1[i] + c, arg2[i])] — broadcast same constant to all lanes *)
+  | LimbVecConstBinop (oc : OpCode) (cs : list Z)
+      (** [dst = oc(arg1[i] + cs, arg2[i])] — per-lane constants (length 4),
+          built via vpbroadcastq of lane-1 value + vpblendd patches *).
 
-(** Generate instructions for one limb.
+(** vpblendd immediate mask for a 64-bit lane index (each lane = 2 dwords). *)
+Definition blend_mask_for_lane (lane : nat) : Z :=
+  Z.shiftl 3 (Z.of_nat (lane * 2)).
+
+(** Emit instructions to patch one lane of [dst_reg] with a different constant.
+    Uses ymm15 as scratch; assumes rax is available. *)
+Definition emit_blend_lane (dst_reg : REG) (lane : nat) (c : Z) : list Line :=
+  let scratch := VReg ymm15 in
+  [ mk_instr mov     [reg (SReg rax); Syntax.const c]
+  ; mk_instr vmovq   [reg scratch; reg (SReg rax)]
+  ; mk_instr vpbroadcastq [reg scratch; reg scratch]
+  ; mk_instr vpblendd [reg dst_reg; reg dst_reg; reg scratch;
+                        Syntax.const (blend_mask_for_lane lane)]
+  ].
+
+(** Generate instructions for one group (YMM register).
     Calling convention: rdi=out, rsi=arg1, rdx=arg2. *)
 Definition emit_limb (limb_idx : nat) (lop : limb_op) : list Line :=
   let off := (Z.of_nat limb_idx * 32)%Z in
@@ -66,7 +85,6 @@ Definition emit_limb (limb_idx : nat) (lop : limb_op) : list Line :=
     ]
   | LimbConstBinop oc c =>
     let tmp := VReg (nth_ymm (limb_idx + 8)) in
-    (* mov rax, constant; vmovq xmm_tmp, rax; vpbroadcastq ymm_tmp, xmm_tmp *)
     [ mk_instr mov     [reg (SReg rax); Syntax.const c]
     ; mk_instr vmovq   [reg tmp; reg (SReg rax)]
     ; mk_instr vpbroadcastq [reg tmp; reg tmp]
@@ -75,6 +93,24 @@ Definition emit_limb (limb_idx : nat) (lop : limb_op) : list Line :=
     ; mk_instr oc      [reg dst; reg dst; mem (mem_at rdx off)]
     ; mk_instr vmovdqu [mem (mem_at rdi off); reg dst]
     ]
+  | LimbVecConstBinop oc cs =>
+    let tmp := VReg (nth_ymm (limb_idx + 8)) in
+    let bval := nth 0%nat cs 0%Z in
+    let build_const :=
+      ([ mk_instr mov     [reg (SReg rax); Syntax.const bval]
+       ; mk_instr vmovq   [reg tmp; reg (SReg rax)]
+       ; mk_instr vpbroadcastq [reg tmp; reg tmp]
+       ]
+       ++ (if Z.eqb (nth 1%nat cs 0%Z) bval then [] else emit_blend_lane tmp 1 (nth 1%nat cs 0%Z))
+       ++ (if Z.eqb (nth 2%nat cs 0%Z) bval then [] else emit_blend_lane tmp 2 (nth 2%nat cs 0%Z))
+       ++ (if Z.eqb (nth 3%nat cs 0%Z) bval then [] else emit_blend_lane tmp 3 (nth 3%nat cs 0%Z)))%list
+    in
+    (build_const
+     ++ [ mk_instr vmovdqu [reg dst; mem (mem_at rsi off)]
+        ; mk_instr vpaddq  [reg dst; reg dst; reg tmp]
+        ; mk_instr oc      [reg dst; reg dst; mem (mem_at rdx off)]
+        ; mk_instr vmovdqu [mem (mem_at rdi off); reg dst]
+        ])%list
   end.
 
 (** ** Top-level: generate complete function *)
@@ -99,9 +135,24 @@ Definition emit_function (fname : string) (limb_ops : list limb_op) : Lines :=
 Definition vectorized_add (fname : string) (n_limbs : nat) : Lines :=
   emit_function fname (repeat (LimbBinop vpaddq) n_limbs).
 
-(** Vectorized [sub]: each limb has a different underflow-prevention constant. *)
+(** Group a flat list into chunks of [n], padding the last chunk with [d]. *)
+Fixpoint chunks_of_aux {A} (fuel : nat) (n : nat) (d : A) (xs : list A) : list (list A) :=
+  match fuel with
+  | O => []
+  | S fuel' =>
+    match xs with
+    | [] => []
+    | _ => firstn n (xs ++ repeat d n) :: chunks_of_aux fuel' n d (skipn n xs)
+    end
+  end.
+
+Definition chunks_of {A} (n : nat) (d : A) (xs : list A) : list (list A) :=
+  chunks_of_aux (List.length xs) n d xs.
+
+(** Vectorized [sub]: takes flat list of underflow constants (one per batched limb),
+    groups them by 4 lanes per YMM, and uses [LimbVecConstBinop] for each group. *)
 Definition vectorized_sub (fname : string) (consts : list Z) : Lines :=
-  emit_function fname (map (LimbConstBinop vpsubq) consts).
+  emit_function fname (map (LimbVecConstBinop vpsubq) (chunks_of 4 0%Z consts)).
 
 (** ** Scalar op mapping (for future general DAG transformation) *)
 

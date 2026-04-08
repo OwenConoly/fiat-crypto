@@ -4,6 +4,17 @@ Majority written by Claude Code.
 Technical discoveries, debugging notes, and patterns that took effort to figure out. 
 Try to keep this file to information that will be continually relevant, learned patterns about the codebase, etc. NOT just things that are true right now (like a the state of built binaries).
 
+## AoS layout vs SoA layout in batched specs (2026-04-07)
+
+The batched PHOAS specs (`batched_addmod`, `batched_submod`, `batched_carry_mulmod`) use **AoS** (array-of-structures) layout: 4 complete n-limb results concatenated. For 5-limb curve25519: `[e0_l0..e0_l4, e1_l0..e1_l4, e2_l0..e2_l4, e3_l0..e3_l4]`.
+
+This means each YMM register (4 × 64-bit lanes) processes 4 **consecutive** limbs from the flat array, which straddle element boundaries. For sub, the 0xfda balance constant (limb 0 of each element) appears at positions 0, 5, 10, 15 — rotating through YMM lanes across groups.
+
+The n=20 trick used a completely different layout where fiat-crypto computed its own 20-limb decomposition with different bit widths and different balance constants. The proper batched specs use the same 5-limb constants as scalar, just repeated 4 times.
+
+**Important for assembly writing**: when writing vector assembly for a batched spec, the constants and data layout follow AoS, NOT SoA. Each group of 4 consecutive limbs may span different limb positions across elements.
+
+
 ## peel_disjoint_set_slices won't reduce in proofs (2026-04-01)
 
 `cbn [peel_disjoint_set_slices]`, `simpl`, `cbv`, and `unfold` all fail to reduce `peel_disjoint_set_slices lo1 s1 inner 0` to `ExprApp (slice lo1 s1, [inner])` in the base case of the induction proof, even though fuel is literally `0`. The `%N` scope on the Fixpoint or some opacity issue may be blocking reduction. `change ... with ...` was suggested but untested. Worth asking on Slack/Zulip — this is a Coq reduction behavior issue, not a math issue.
