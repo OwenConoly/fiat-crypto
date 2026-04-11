@@ -81,6 +81,7 @@ Local Opaque
       reified_encode_gen
       reified_zero_gen
       reified_batched_carry_mul_gen
+      reified_batched_carry_gen
       reified_one_gen
       reified_eval_gen
       reified_bytes_eval_gen
@@ -405,6 +406,22 @@ Section __.
         FromPipelineToString!
           machine_wordsize prefix "batch_sub" batch_sub
           (fun fname _ _ => [text_before_function_name ++ fname ++ " performs 4 independent field subtractions."]%string).
+
+  Definition batch_carry
+    := Pipeline.BoundsPipeline
+         true (* subst01 *)
+         possible_values
+         (reified_batched_carry_gen
+            @ GallinaReify.Reify (Qnum limbwidth) @ GallinaReify.Reify (Z.pos (Qden limbwidth)) @ GallinaReify.Reify s @ GallinaReify.Reify c @ GallinaReify.Reify n @ GallinaReify.Reify idxs)
+         (Some batch_loose_bounds, tt)
+         (Some batch_tight_bounds).
+
+  Definition sbatch_carry (prefix : string)
+    : string * (Pipeline.M (Pipeline.ExtendedSynthesisResult _))
+    := Eval cbv beta in
+        FromPipelineToString!
+          machine_wordsize prefix "batch_carry" batch_carry
+          (fun fname _ _ => [text_before_function_name ++ fname ++ " performs 4 independent field carry reductions."]%string).
 
   Definition carry_square
     := Pipeline.BoundsPipeline
@@ -1007,6 +1024,7 @@ Section __.
             ("batch_carry_mul", wrap_s sbatch_carry_mul);
             ("batch_add", wrap_s sbatch_add);
             ("batch_sub", wrap_s sbatch_sub);
+            ("batch_carry", wrap_s sbatch_carry);
             ("carry_square", wrap_s scarry_square);
             ("carry", wrap_s scarry);
             ("add", wrap_s sadd);

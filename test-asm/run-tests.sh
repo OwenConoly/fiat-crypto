@@ -110,9 +110,11 @@ while IFS='	' read -r name category expected binary curve_name bitwidth limbs pr
             [ "$QUIET" -eq 0 ] && printf "FAIL   %s\n" "$name"
         fi
         if [ "$VERBOSE" -eq 1 ]; then
-            echo "--- output (last 40 lines) ---"
-            echo "$output" | tail -40
+            echo "--- output (last 80 lines) ---"
+            echo "$output" | tail -80
             echo "--- end ---"
+            echo "$output" > /tmp/test_output_${name}.txt
+            echo "(full output saved to /tmp/test_output_${name}.txt)"
         fi
     fi
 done < "$MANIFEST"

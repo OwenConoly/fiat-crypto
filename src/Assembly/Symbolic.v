@@ -354,6 +354,7 @@ Module Export RewritePass.
     | slice_set_slice
     | slice_set_slice_disjoint
     | slice_slice
+    | slice_tower
     | slice_vadd
     | slice_vsub
     | sub_to_add_neg
@@ -389,6 +390,14 @@ Module Export RewritePass.
         ;slice_slice
         ;slice_vadd
         ;slice_vsub
+        ;slice_tower
+        ;slice_set_slice_disjoint
+        ;slice_set_slice
+        (* Second round: after slice_set_slice peels one layer, the result may
+           need slice_set_slice_disjoint (or vice versa) for gather patterns
+           that nest 4+ set_slice levels (vmovq -> vpunpcklqdq -> vinserti128) *)
+        ;slice_set_slice_disjoint
+        ;slice_set_slice
         ;slice_set_slice_disjoint
         ;slice_set_slice
         ;set_slice0_small
@@ -438,7 +447,7 @@ Module Export Options.
     ; asm_node_reveal_depth : node_reveal_depth_opt
     }.
 
-  Definition default_node_reveal_depth := 3%nat.
+  Definition default_node_reveal_depth := 6%nat.
 
   (* This holds the list of computed options, which are passed around between methods *)
   Class symbolic_options_computed_opt :=
@@ -2619,6 +2628,80 @@ Definition slice_slice (d : dag) :=
 Global Instance slice_slice_ok : Ok slice_slice.
 Proof using Type. t. f_equal. Z.bitblast. Qed.
 
+(* Recursively normalize (slice lo sz) over nested slice/set_slice towers,
+   peeling three kinds of layers at once:
+   - nested slice lo2 s2: combine offsets to (lo2+lo, sz, e')
+   - disjoint set_slice lo2 s2: descend into base
+   - containing set_slice lo2 s2: descend into val with adjusted lo
+   Needed for gather patterns (vmovq -> vpunpcklqdq -> vinserti128) that
+   interleave slice and set_slice layers, which the individual rules miss. *)
+Fixpoint slice_tower_normalize (lo sz : N) (inner : expr) (fuel : nat) {struct fuel} : expr :=
+  match fuel with
+  | O => ExprApp (slice lo sz, [inner])
+  | S fuel' =>
+    match inner with
+    | ExprApp (slice lo2 s2, [e']) =>
+        if N.leb (lo + sz) s2
+        then slice_tower_normalize (lo2 + lo) sz e' fuel'
+        else ExprApp (slice lo sz, [inner])
+    | ExprApp (set_slice lo2 s2, [base; val]) =>
+        if (N.leb (lo + sz) lo2 || N.leb (lo2 + s2) lo)%bool
+        then slice_tower_normalize lo sz base fuel'
+        else if (N.leb lo2 lo && N.leb (lo + sz) (lo2 + s2))%bool
+        then slice_tower_normalize (lo - lo2) sz val fuel'
+        else ExprApp (slice lo sz, [inner])
+    | _ => ExprApp (slice lo sz, [inner])
+    end
+  end%N.
+
+Lemma slice_tower_normalize_eval G d : forall fuel lo sz inner v,
+  gensym_dag_ok G d ->
+  eval G d (ExprApp (slice lo sz, [inner])) v ->
+  eval G d (slice_tower_normalize lo sz inner fuel) v.
+Proof using Type.
+  induction fuel; intros lo sz inner v Hok H0.
+  - simpl. exact H0.
+  - cbn [slice_tower_normalize]. destruct inner; try exact H0.
+    destruct n as [op args]. destruct op; try exact H0.
+    + (* slice lo2 s2 *)
+      destruct args as [|e' args']; try exact H0.
+      destruct args' as [|? ?]; try exact H0.
+      destruct (N.leb (lo + sz) sz0) eqn:Hleb; try exact H0.
+      apply N.leb_le in Hleb.
+      apply IHfuel; trivial.
+      t. f_equal. Z.bitblast.
+    + (* set_slice lo2 s2 *)
+      destruct args as [|base args']; try exact H0.
+      destruct args' as [|val args'']; try exact H0.
+      destruct args'' as [|? ?]; try exact H0.
+      destruct ((lo + sz <=? lo0)%N || (lo0 + sz0 <=? lo)%N) eqn:Hdisj.
+      * apply IHfuel; trivial.
+        apply Bool.orb_true_iff in Hdisj.
+        destruct Hdisj as [Hd|Hd]; apply N.leb_le in Hd; t; f_equal; Z.bitblast.
+      * destruct ((lo0 <=? lo)%N && (lo + sz <=? lo0 + sz0)%N) eqn:Hcont; try exact H0.
+        apply Bool.andb_true_iff in Hcont. destruct Hcont as [Hc1 Hc2].
+        apply N.leb_le in Hc1. apply N.leb_le in Hc2.
+        apply IHfuel; trivial.
+        t. f_equal. Z.bitblast.
+Qed.
+
+Definition slice_tower (d : dag) :=
+  fun e => match e with
+    ExprApp (slice lo sz, [inner]) =>
+      slice_tower_normalize lo sz inner 16
+  | _ => e end.
+#[local] Instance describe_slice_tower : description_of Rewrite.slice_tower
+  := "Recursively normalizes slice over nested slice/set_slice towers (gather patterns)".
+Global Instance slice_tower_ok : Ok slice_tower.
+Proof using Type.
+  cbv [Ok slice_tower]; intros G d e v Hok Heval.
+  destruct e as [|n]; try exact Heval.
+  destruct n as [op args]. destruct op; try exact Heval.
+  destruct args as [|inner args']; try exact Heval.
+  destruct args' as [|? ?]; try exact Heval.
+  apply slice_tower_normalize_eval; assumption.
+Qed.
+
 Ltac bool_simpl :=
     repeat (first [ rewrite !Bool.andb_true_r in *
                   | rewrite !Bool.orb_false_r in *
@@ -4159,6 +4242,7 @@ Definition named_pass (name : RewritePass.rewrite_pass) : dag -> expr -> expr
      | RewritePass.slice_set_slice => slice_set_slice
      | RewritePass.slice_set_slice_disjoint => slice_set_slice_disjoint
      | RewritePass.slice_slice => slice_slice
+     | RewritePass.slice_tower => slice_tower
      | RewritePass.slice_vadd => slice_vadd
      | RewritePass.slice_vsub => slice_vsub
      | RewritePass.sub_to_add_neg => sub_to_add_neg
@@ -4727,6 +4811,61 @@ Fixpoint blend_aux {opts : symbolic_options_computed_opt} {descr : description}
     blend_aux v1 v2 mask (S lane_idx) n lane_width new_acc
   end.
 
+(* vpmuludq: for each 64-bit lane, multiply low 32 bits of each source *)
+Definition make_muludq_lane {opts : symbolic_options_computed_opt} {descr : description}
+  (v1 v2 : idx) (lane_idx : nat) (lane_width : N) : M idx :=
+  let offset := (N.of_nat lane_idx * lane_width)%N in
+  l1 <- App (slice offset lane_width, [v1]);
+  l2 <- App (slice offset lane_width, [v2]);
+  l1_lo <- App (slice 0 32, [l1]);
+  l2_lo <- App (slice 0 32, [l2]);
+  App (mul 64%N, [l1_lo; l2_lo]).
+
+Fixpoint muludq_aux {opts : symbolic_options_computed_opt} {descr : description}
+  (v1 v2 : idx) (lane_idx num_remaining : nat) (lane_width : N) (acc : idx) : M idx :=
+  match num_remaining with
+  | O => ret acc
+  | S n =>
+    lane_val <- make_muludq_lane v1 v2 lane_idx lane_width;
+    new_acc <- App (set_slice ((N.of_nat lane_idx * lane_width)%N) lane_width,
+                    [acc; lane_val]);
+    muludq_aux v1 v2 (S lane_idx) n lane_width new_acc
+  end.
+
+Definition SymexMuludq {opts : symbolic_options_computed_opt} {descr : description}
+  {s : OperationSize} {sa : AddressSize}
+  (dst src1 src2 : ARG) : M unit :=
+  let num_lanes := N.to_nat (s / 64)%N in
+  v1 <- GetOperand src1;
+  v2 <- GetOperand src2;
+  zero <- App (const 0, []);
+  result <- muludq_aux v1 v2 0 num_lanes 64%N zero;
+  SetOperand dst result.
+
+(* Vector shift by immediate: apply shift_op per lane with shared shift amount *)
+Fixpoint vector_shift_imm_aux {opts : symbolic_options_computed_opt} {descr : description}
+  (v shift_amt : idx) (shift_op : op) (lane_idx num_remaining : nat)
+  (lane_width : N) (acc : idx) : M idx :=
+  match num_remaining with
+  | O => ret acc
+  | S n =>
+    let offset := (N.of_nat lane_idx * lane_width)%N in
+    lane <- App (slice offset lane_width, [v]);
+    lane_val <- App (shift_op, [lane; shift_amt]);
+    new_acc <- App (set_slice offset lane_width, [acc; lane_val]);
+    vector_shift_imm_aux v shift_amt shift_op (S lane_idx) n lane_width new_acc
+  end.
+
+Definition SymexVectorShiftImm {opts : symbolic_options_computed_opt} {descr : description}
+  {s : OperationSize} {sa : AddressSize}
+  (dst src imm : ARG) (shift_op : op) : M unit :=
+  let num_lanes := N.to_nat (s / 64)%N in
+  v <- GetOperand src;
+  imm_idx <- GetOperand imm;
+  zero <- App (const 0, []);
+  result <- vector_shift_imm_aux v imm_idx shift_op 0 num_lanes 64%N zero;
+  SetOperand dst result.
+
 End SymbolicVector.
 
 
@@ -4784,6 +4923,82 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     zero <- App (const 0, []);
     result <- SymbolicVector.blend_aux v1 v2 imm_c 0 num_lanes 32%N zero;
     SetOperand dst result
+
+  | vpmuludq, [dst; src1; src2] => (* vector packed multiply unsigned dword to qword *)
+    SymbolicVector.SymexMuludq dst src1 src2
+  | vpsrlq, [dst; src; imm] => (* vector packed shift right logical qword *)
+    SymbolicVector.SymexVectorShiftImm dst src imm (shr 64)
+  | vpsllq, [dst; src; imm] => (* vector packed shift left logical qword *)
+    SymbolicVector.SymexVectorShiftImm dst src imm (shl 64)
+
+  | vpunpcklqdq, [dst; src1; src2] => (* interleave low qwords from each 128-bit half *)
+    v1 <- GetOperand src1;
+    v2 <- GetOperand src2;
+    let num_halves := N.to_nat (s / 128)%N in
+    zero <- App (const 0, []);
+    result <- (fix aux (half_idx remaining : nat) (acc : idx) {struct remaining} : M idx :=
+      match remaining with
+      | O => ret acc
+      | S n =>
+        (* low qword of each 128-bit half *)
+        let lo_offset := (N.of_nat half_idx * 128)%N in
+        lo1 <- App (slice lo_offset 64, [v1]);
+        lo2 <- App (slice lo_offset 64, [v2]);
+        (* place as [lo1, lo2] in the half_idx-th 128-bit group *)
+        let dst_lo := (N.of_nat half_idx * 128)%N in
+        let dst_hi := (N.of_nat half_idx * 128 + 64)%N in
+        acc' <- App (set_slice dst_lo 64, [acc; lo1]);
+        acc'' <- App (set_slice dst_hi 64, [acc'; lo2]);
+        aux (S half_idx) n acc''
+      end) 0%nat num_halves zero;
+    SetOperand dst result
+
+  | vpunpckhqdq, [dst; src1; src2] => (* interleave high qwords from each 128-bit half *)
+    v1 <- GetOperand src1;
+    v2 <- GetOperand src2;
+    let num_halves := N.to_nat (s / 128)%N in
+    zero <- App (const 0, []);
+    result <- (fix aux (half_idx remaining : nat) (acc : idx) {struct remaining} : M idx :=
+      match remaining with
+      | O => ret acc
+      | S n =>
+        (* high qword of each 128-bit half *)
+        let hi_offset := (N.of_nat half_idx * 128 + 64)%N in
+        hi1 <- App (slice hi_offset 64, [v1]);
+        hi2 <- App (slice hi_offset 64, [v2]);
+        (* place as [hi1, hi2] in the half_idx-th 128-bit group *)
+        let dst_lo := (N.of_nat half_idx * 128)%N in
+        let dst_hi := (N.of_nat half_idx * 128 + 64)%N in
+        acc' <- App (set_slice dst_lo 64, [acc; hi1]);
+        acc'' <- App (set_slice dst_hi 64, [acc'; hi2]);
+        aux (S half_idx) n acc''
+      end) 0%nat num_halves zero;
+    SetOperand dst result
+
+  | vpextrq, [dst; src; imm] => (* extract 64-bit lane from XMM *)
+    v <- GetOperand (s:=128%N) src;
+    imm_idx <- GetOperand imm;
+    imm_c <- RevealConst imm_idx;
+    let lane := Z.land imm_c 1 in
+    result <- App (slice (Z.to_N lane * 64) 64, [v]);
+    SetOperand (s:=64%N) dst result
+
+  | vextracti128, [dst; src; imm] => (* extract 128-bit lane from YMM *)
+    v <- GetOperand (s:=256%N) src;
+    imm_idx <- GetOperand imm;
+    imm_c <- RevealConst imm_idx;
+    let lane := Z.land imm_c 1 in
+    result <- App (slice (Z.to_N lane * 128) 128, [v]);
+    SetOperand (s:=128%N) dst result
+
+  | vinserti128, [dst; src1; src2; imm] => (* insert 128-bit into YMM *)
+    v1 <- GetOperand (s:=256%N) src1;
+    v2 <- GetOperand (s:=128%N) src2;
+    imm_idx <- GetOperand imm;
+    imm_c <- RevealConst imm_idx;
+    let lane := Z.land imm_c 1 in
+    result <- App (set_slice (Z.to_N lane * 128) 128, [v1; v2]);
+    SetOperand (s:=256%N) dst result
 
   | xchg, [a; b] => (* Note: unbundle when switching from N to Z *)
     va <- GetOperand a;

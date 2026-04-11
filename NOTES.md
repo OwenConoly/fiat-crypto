@@ -1,8 +1,67 @@
 # Notes
 
-Majority written by Claude Code. 
-Technical discoveries, debugging notes, and patterns that took effort to figure out. 
+Majority written by Claude Code.
+Technical discoveries, debugging notes, and patterns that took effort to figure out.
 Try to keep this file to information that will be continually relevant, learned patterns about the codebase, etc. NOT just things that are true right now (like a the state of built binaries).
+
+
+## Real AVX2 curve25519 implementations use 9×29-bit (or 10×25.5-bit) limbs, not 5×51 (2026-04-11)
+
+**Critical discovery for the batch_avx_carry_mul effort.**
+
+Existing hand-tuned AVX2 implementations of curve25519 (avxecc, curve25519-dalek-ng, Faz-Hernández/López) do **not** use 5×51-bit limbs. They use reduced-radix representations specifically to fit multiplies into `vpmuludq` (32×32 → 64):
+
+- **avxecc** (hchengv/avxecc on github): **9 limbs of 29 bits** each, SoA layout (one `__m256i` per limb, four field elements interleaved across lanes). Two 30-bit values multiply to ≤60 bits, well within 64.
+- **curve25519-dalek-ng**: **10 limbs in radix 25.5** (i.e. alternating 26-bit and 25-bit limbs), also SoA.
+- Both use `VMAC` = `vpmuludq` + `vpaddq`, plus `vpsrlq`/`vpandq` for carry propagation. No scalar extraction needed.
+
+**Fiat-crypto can synthesize this.** `unsaturated_solinas 25519 64 9 '2^255 - 19' carry_mul --no-wide-int` produces curve25519 carry_mul with 9-limb 29-bit rep using pure uint64 arithmetic (no uint128 intermediates). This is directly translatable to an AVX2 SoA implementation with the existing symex support (vpmuludq, vpaddq, vpsrlq, vpandq, vmovdqu all already implemented).
+
+**The old plan (5×51-bit AoS + hybrid scalar multiply)** — pulling lanes out of YMM for scalar multiplies and putting them back — is what avxecc explicitly avoided. It's not how real implementations are structured. We should pivot batch_avx_carry_mul to mirror avxecc's 9×29-bit SoA structure.
+
+**Implementation sketch for `test-asm/batch_avx_carry_mul.asm`**:
+1. Use `--no-wide-int 25519 64 9 '2^255 - 19' carry_mul` as the synthesis target.
+2. Memory layout: 36 uint64s per group = 9 limbs × 4 field elements, SoA (limb 0 of all 4 first, then limb 1, etc.). Each YMM register holds one limb from 4 elements.
+3. `vmovdqu` loads one limb across 4 elements; `vpmuludq` does lane-parallel multiplication; `vpaddq` accumulates; `vpsrlq` + `vpandq` propagates carries.
+4. Structurally matches the scalar 9-limb carry_mul output line-for-line, modulo `op op op → vpop op op op` rename.
+5. Register allocation: ymm0..ymm8 for the 9 a-limbs, ymm9..ymm17 for the 9 b-limbs is possible if we use stack for accumulators, or reload from memory.
+
+Estimated scale: ~260 scalar statements in the reference C output × 4-way batch = a mechanical translation of a large but manageable program. No new symex needed.
+
+**Reference**: https://github.com/hchengv/avxecc/blob/main/src/gfparith.c — `mpi29_gfp_mul_avx2` is the direct template.
+
+
+## Rewrite passes are strictly top-down-once — the slice_tower lesson (2026-04-11)
+
+**General pattern this reveals — highly relevant for any future rewrite rule work.**
+
+`Rewrite.expr` is `List.fold_left` over the pass list. Each pass is a function `dag -> expr -> expr` that is applied ONCE to the top of the expression. It does **not** recurse into subexpressions, and it does **not** get re-invoked when an earlier pass in the list produces a pattern that a later pass could have simplified further up the chain.
+
+Concretely: if pass A transforms `f(g(h(x)))` into `f(h(x))` (stripping g), and pass B only fires on `f(h(x))` → `f(x)`, then as long as B comes **after** A in the pass list, B will fire. But if B fires first (on the original `f(g(h(x)))`, which it can't match), B is done. A then strips g. Now the only way to simplify `f(h(x))` is if B runs *again later*. Multiple copies of B in the pass list is one workaround. But if the structure is deeply interleaved — e.g. f(g(f(g(h(x))))) — you need A/B/A/B alternation, and the number of alternations is unbounded.
+
+For the SIMD gather pattern (vmovq → vpunpcklqdq → vinserti128), a lane extraction `slice 0 64 [ymm_state]` has to peel through interleaved `slice 0 256` and `set_slice` layers. Each of the three existing rules (`slice_slice`, `slice_set_slice`, `slice_set_slice_disjoint`) only handles one of the three layer kinds, so you need the alternation.
+
+**The fix pattern: fuel-recursive normalizers inside one rule.** Instead of relying on pass-level iteration, write a `Fixpoint` helper that recurses on the tree internally, handling all the layer kinds in a single rule invocation. `peel_disjoint_set_slices` already used this pattern for disjoint set_slice peeling. `slice_tower_normalize` (Symbolic.v:2629) generalizes it to handle:
+- nested `slice lo2 s2 [e']` → recurse with offset `lo2 + lo`
+- disjoint `set_slice lo2 s2 [base; _]` → recurse on base
+- containing `set_slice lo2 s2 [_; val]` → recurse on val with offset `lo - lo2`
+
+All three in one pass, fuel=16. This is the "right" fix: any interleaving of the three layer kinds is collapsed in a single rule application, and there's no dependence on pass ordering.
+
+**Proof structure for this pattern**: the helper lemma `slice_tower_normalize_eval` induction is on fuel, not on the expression. For each layer kind, destructure the args list carefully (`destruct args as [|x [|y [|z ?]]]`), test the boolean condition, and apply IH after establishing the Z-level equivalence via `t. f_equal. Z.bitblast.`. The Ok wrapper does NOT use `t` on the outer shell — `t` over-destructures a fuel-recursive call and generates "No such goal"; instead manually destructure the top-level match (`destruct e`, `destruct n as [op args]`, `destruct op`, destructure args list) and then call the helper lemma.
+
+**Debugging methodology that worked** (and was the only way to find the root cause):
+1. Run checker with `--debug-asm-symex-first` and capture the full DAG dump to a file.
+2. Grep for the unification error at the end — identifies the specific ref IDs that diverge between PHOAS and ASM sides.
+3. Trace each ASM-side node back through its args recursively, by grepping `^\(\*N\*\)` in the dump. Document the shape of the nested tower.
+4. Manually simulate each rewrite pass on the expanded tree, one at a time, to identify which pass fails to fire and why.
+5. Fix = a single fuel-recursive rule that collapses the entire tower in one shot.
+
+**Sharp edges to remember**:
+- `reveal_node_at_least` with depth 6 fully expands the tree into nested ExprApps, so rules see the full structure at the top. But after a rule produces output, only the TOP of the output is re-matched by subsequent passes.
+- `merge` is not `simplify`. `App` calls `simplify` (reveal + rewrite passes); `merge` just dedupes `(op, args)` tuples via `reverse_lookup`. If a rule output has nested ExprApps, those nested forms are merged as-is, even if they could have been simplified further.
+- Adding duplicate passes to the list (e.g. `slice_set_slice_disjoint;slice_set_slice;slice_set_slice_disjoint;slice_set_slice;...`) is a cheap workaround but doesn't scale. Always prefer a recursive normalizer for alternation patterns.
+- Increasing `default_node_reveal_depth` from 3 to 10 does NOT help this class of issue — reveal depth only affects initial tree expansion, not pass re-application.
 
 ## AoS layout vs SoA layout in batched specs (2026-04-07)
 

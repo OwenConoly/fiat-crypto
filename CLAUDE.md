@@ -64,7 +64,16 @@ I have a remote server that runs linux and can do some faster computation, but w
 
 ### Equivalence checker and synthesis CLI
 
-The CLI binaries live in `src/ExtractionOCaml/`. The main one for our work is `unsaturated_solinas`. Build it with:
+**Preferred: use the test runner.** All equivalence check tests are registered in `test-asm/test-manifest.tsv` and run via `./test-asm/run-tests.sh`. Use this instead of invoking the CLI directly whenever the test you want is in the manifest:
+```
+./test-asm/run-tests.sh              # run all tests
+./test-asm/run-tests.sh -v           # verbose (show checker output on failure)
+./test-asm/run-tests.sh -c batch     # filter by category
+./test-asm/run-tests.sh -n avx-xmm-add  # run a single test by name
+```
+The manifest tracks expected status (`pass`/`fail`/`skip`). When a previously-failing test starts passing, the runner reports `XPASS` — update the manifest to `pass`.
+
+**Direct CLI invocation** — only needed for one-off checks not in the manifest, synthesis, or debugging. The CLI binaries live in `src/ExtractionOCaml/`. Build with:
 ```
 make -j9 src/ExtractionOCaml/unsaturated_solinas
 ```
@@ -149,6 +158,7 @@ The equivalence checker compares two DAGs (one from PHOAS, one from assembly sym
 - `slice_set_slice`: `slice lo1 s1 (set_slice lo2 s2 [_, val])` → `slice (lo1-lo2) s1 [val]` when slice range is within set_slice range
 - `slice_set_slice_disjoint`: `slice lo1 s1 (set_slice lo2 s2 [base, _])` → `slice lo1 s1 [base]` when ranges don't overlap
 - `set_slice_set_slice`: `set_slice lo s (set_slice lo s [x, _], y)` → `set_slice lo s [x, y]` when inner is overwritten
+- `slice_tower` (fuel-recursive): normalizes `slice lo sz [inner]` through *arbitrary interleaved* nested slice/set_slice layers in one pass — peels nested slices (combining offsets), disjoint set_slices (descends to base), and containing set_slices (descends to val). Needed for gather towers (vmovq→vpunpcklqdq→vinserti128) where a single application of the individual rules above stops after peeling one layer, because subsequent passes don't see the newly exposed nested slice/set_slice underneath.
 
 **Why these matter for SIMD:** XMM registers are modeled as `slice 0 128` of YMM (256-bit). Reading an XMM wraps in `slice 0 128`, writing wraps in `set_slice 0 128`. vpaddq on XMM produces results wrapped in set_slice layers. Without these rules, the DAG has chains like `slice 0 64 (slice 0 128 (set_slice 64 64 [...]))` that don't simplify to the underlying `add 64` operation, causing equivalence to fail.
 

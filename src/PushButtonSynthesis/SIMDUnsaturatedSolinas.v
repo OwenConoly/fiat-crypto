@@ -50,6 +50,16 @@ Section batched_ops.
     addmod limbwidth_num limbwidth_den n
       (firstn n (skipn (n+n+n) a)) (firstn n (skipn (n+n+n) b)).
 
+  Definition batched_carrymod (f : list Z) : list Z :=
+    carrymod limbwidth_num limbwidth_den s c n idxs
+      (firstn n f) ++
+    carrymod limbwidth_num limbwidth_den s c n idxs
+      (firstn n (skipn n f)) ++
+    carrymod limbwidth_num limbwidth_den s c n idxs
+      (firstn n (skipn (n+n) f)) ++
+    carrymod limbwidth_num limbwidth_den s c n idxs
+      (firstn n (skipn (n+n+n) f)).
+
   Context (balance : list Z).
 
   Definition batched_submod (a b : list Z) : list Z :=
@@ -104,3 +114,17 @@ Hint Immediate reified_batched_sub_gen_correct_proj2 : wf_gen_cache.
 #[global]
 Hint Rewrite reified_batched_sub_gen_correct_proj1 : interp_gen_cache.
 Local Opaque reified_batched_sub_gen.
+
+Derive reified_batched_carry_gen
+       SuchThat (is_reification_of reified_batched_carry_gen batched_carrymod)
+       As reified_batched_carry_gen_correct.
+Proof. Time cache_reify (). Time Qed.
+Local Definition reified_batched_carry_gen_correct_proj1 := proj1 reified_batched_carry_gen_correct.
+Local Definition reified_batched_carry_gen_correct_proj2 := proj2 reified_batched_carry_gen_correct.
+#[global]
+Hint Extern 1 (_ = _) => apply_cached_reification batched_carrymod reified_batched_carry_gen_correct_proj1 : reify_cache_gen.
+#[global]
+Hint Immediate reified_batched_carry_gen_correct_proj2 : wf_gen_cache.
+#[global]
+Hint Rewrite reified_batched_carry_gen_correct_proj1 : interp_gen_cache.
+Local Opaque reified_batched_carry_gen.

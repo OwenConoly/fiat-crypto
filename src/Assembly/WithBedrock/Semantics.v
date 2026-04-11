@@ -324,6 +324,76 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
     let num_lanes := N.to_nat (N.div s 32) in
     let result := SemanticVector.blend v1 v2 imm num_lanes 32 in
     SetOperand sa s st dst result
+  | vpmuludq, [dst; src1; src2] => (* vector packed multiply unsigned dword to qword *)
+    let num_lanes := N.to_nat (N.div s 64) in
+    let lane_muludq := (fun a b => Z.land a (Z.ones 32) * Z.land b (Z.ones 32)) in
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_muludq num_lanes 64
+  | vpsrlq, [dst; src; cnt] => (* vector packed shift right logical qword *)
+    let num_lanes := N.to_nat (N.div s 64) in
+    v <- DenoteOperand sa s st src;
+    cnt_val <- DenoteOperand sa s st cnt;
+    let cnt_val := Z.land cnt_val (Z.ones 8) in (* shift count from low byte *)
+    let result := SemanticVector.vector_binop_values v v
+      (fun a _ => Z.shiftr a cnt_val) num_lanes 64 in
+    SetOperand sa s st dst result
+  | vpsllq, [dst; src; cnt] => (* vector packed shift left logical qword *)
+    let num_lanes := N.to_nat (N.div s 64) in
+    v <- DenoteOperand sa s st src;
+    cnt_val <- DenoteOperand sa s st cnt;
+    let cnt_val := Z.land cnt_val (Z.ones 8) in
+    let result := SemanticVector.vector_binop_values v v
+      (fun a _ => Z.land (Z.shiftl a cnt_val) (Z.ones 64)) num_lanes 64 in
+    SetOperand sa s st dst result
+
+  | vpunpcklqdq, [dst; src1; src2] => (* interleave low qwords from each 128-bit half *)
+    v1 <- DenoteOperand sa s st src1;
+    v2 <- DenoteOperand sa s st src2;
+    let num_halves := N.to_nat (N.div s 128) in
+    let result := (fix aux (half_idx remaining : nat) :=
+      match remaining with
+      | O => 0
+      | S n =>
+        let base := Z.of_nat half_idx * 128 in
+        let lo1 := SemanticVector.extract_lane v1 (2 * half_idx) 64 in
+        let lo2 := SemanticVector.extract_lane v2 (2 * half_idx) 64 in
+        Z.lor (Z.lor (Z.shiftl lo1 base) (Z.shiftl lo2 (base + 64)))
+              (aux (S half_idx) n)
+      end) 0%nat num_halves in
+    SetOperand sa s st dst result
+  | vpunpckhqdq, [dst; src1; src2] => (* interleave high qwords from each 128-bit half *)
+    v1 <- DenoteOperand sa s st src1;
+    v2 <- DenoteOperand sa s st src2;
+    let num_halves := N.to_nat (N.div s 128) in
+    let result := (fix aux (half_idx remaining : nat) :=
+      match remaining with
+      | O => 0
+      | S n =>
+        let base := Z.of_nat half_idx * 128 in
+        let hi1 := SemanticVector.extract_lane v1 (2 * half_idx + 1) 64 in
+        let hi2 := SemanticVector.extract_lane v2 (2 * half_idx + 1) 64 in
+        Z.lor (Z.lor (Z.shiftl hi1 base) (Z.shiftl hi2 (base + 64)))
+              (aux (S half_idx) n)
+      end) 0%nat num_halves in
+    SetOperand sa s st dst result
+  | vpextrq, [dst; src; const imm] => (* extract 64-bit lane from XMM *)
+    v <- DenoteOperand sa 128 st src;
+    let lane := Z.land imm 1 in
+    let result := SemanticVector.extract_lane v (Z.to_nat lane) 64 in
+    SetOperand sa 64 st dst result
+  | vextracti128, [dst; src; const imm] => (* extract 128-bit lane from YMM *)
+    v <- DenoteOperand sa 256 st src;
+    let lane := Z.land imm 1 in
+    let result := SemanticVector.extract_lane v (Z.to_nat lane) 128 in
+    SetOperand sa 128 st dst result
+  | vinserti128, [dst; src1; src2; const imm] => (* insert 128-bit into YMM *)
+    v1 <- DenoteOperand sa 256 st src1;
+    v2 <- DenoteOperand sa 128 st src2;
+    let lane := Z.land imm 1 in
+    let mask128 := Z.ones 128 in
+    let shift := lane * 128 in
+    let cleared := Z.land v1 (Z.lnot (Z.shiftl mask128 shift)) in
+    let result := Z.lor cleared (Z.shiftl (Z.land v2 mask128) shift) in
+    SetOperand sa 256 st dst result
 
   | (sbb | sub) as opc, [dst; src] =>
     c <- (match opc with sbb => get_flag st CF | _ => Some false end);
@@ -514,6 +584,14 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
  	| vpxorq, _
  	| vpaddd, _
  	| vpsubd, _
+ 	| vpmuludq, _
+ 	| vpsrlq, _
+ 	| vpsllq, _
+ 	| vpunpcklqdq, _
+ 	| vpunpckhqdq, _
+ 	| vpextrq, _
+ 	| vextracti128, _
+ 	| vinserti128, _
   | adox, _
   | and, _
   | bzhi, _
