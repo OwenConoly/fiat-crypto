@@ -4583,6 +4583,34 @@ Definition Address {opts : symbolic_options_computed_opt} {descr:description} {s
   bi <- App (add sa, [base; index]);
   App (add sa, [bi; offset]).
 
+(* 128-bit load from an already-computed address idx: 2x Load64 + set_slice chain *)
+Definition Load128_of_idx {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (addr : idx) : M idx :=
+  lo <- Load64 addr; (* bottom 64 bits *)
+  eight <- App (const 8, nil);
+  addr_hi <- App (add sa, [addr; eight]); (* addr + 8 *)
+  hi <- Load64 addr_hi; (* top 64 bits *)
+  zero <- App (const 0, nil);
+  v <- App (set_slice 0 64, [zero; lo]);
+  App (set_slice 64 64, [v; hi]).
+
+(* 256-bit load from an already-computed address idx: 4x Load64 + set_slice chain *)
+Definition Load256_of_idx {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (addr : idx) : M idx :=
+  lo0 <- Load64 addr;
+  eight <- App (const 8, nil);
+  addr1 <- App (add sa, [addr; eight]);
+  lo1 <- Load64 addr1;
+  sixteen <- App (const 16, nil);
+  addr2 <- App (add sa, [addr; sixteen]);
+  lo2 <- Load64 addr2;
+  twentyfour <- App (const 24, nil);
+  addr3 <- App (add sa, [addr; twentyfour]);
+  lo3 <- Load64 addr3;
+  zero <- App (const 0, nil);
+  v0 <- App (set_slice 0 64, [zero; lo0]);
+  v1 <- App (set_slice 64 64, [v0; lo1]);
+  v2 <- App (set_slice 128 64, [v1; lo2]);
+  App (set_slice 192 64, [v2; lo3]).
+
 Definition Load {opts : symbolic_options_computed_opt} {descr:description} {s : OperationSize} {sa : AddressSize} (a : MEM) : M idx :=
   let sz := Syntax.operand_size a s in
   addr <- Address a;
@@ -4590,29 +4618,9 @@ Definition Load {opts : symbolic_options_computed_opt} {descr:description} {s : 
     v <- Load64 addr;
     App ((slice 0 sz), [v])
   else if (sz =? 128)%N then
-    lo <- Load64 addr;
-    eight <- App (const 8, nil);
-    addr_hi <- App (add sa, [addr; eight]);
-    hi <- Load64 addr_hi;
-    zero <- App (const 0, nil);
-    v <- App (set_slice 0 64, [zero; lo]);
-    App (set_slice 64 64, [v; hi])
+    Load128_of_idx addr
   else if (sz =? 256)%N then
-    lo0 <- Load64 addr;
-    eight <- App (const 8, nil);
-    addr1 <- App (add sa, [addr; eight]);
-    lo1 <- Load64 addr1;
-    sixteen <- App (const 16, nil);
-    addr2 <- App (add sa, [addr; sixteen]);
-    lo2 <- Load64 addr2;
-    twentyfour <- App (const 24, nil);
-    addr3 <- App (add sa, [addr; twentyfour]);
-    lo3 <- Load64 addr3;
-    zero <- App (const 0, nil);
-    v0 <- App (set_slice 0 64, [zero; lo0]);
-    v1 <- App (set_slice 64 64, [v0; lo1]);
-    v2 <- App (set_slice 128 64, [v1; lo2]);
-    App (set_slice 192 64, [v2; lo3])
+    Load256_of_idx addr
   else err (error.unsupported_memory_access_size sz).
 
 Definition Remove {opts : symbolic_options_computed_opt} {descr:description} {s : OperationSize} {sa : AddressSize} (a : MEM) : M idx :=
