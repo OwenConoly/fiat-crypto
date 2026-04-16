@@ -4583,33 +4583,26 @@ Definition Address {opts : symbolic_options_computed_opt} {descr:description} {s
   bi <- App (add sa, [base; index]);
   App (add sa, [bi; offset]).
 
+(* Load (n * 64) bits starting at addr, as a single idx.
+   Produces n sequential Load64s at addr, addr+8, ..., addr+8*(n-1),
+   combined via set_slice into one (n*64)-bit value. *)
+Fixpoint Load_of_idx {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (n : nat) (addr : idx) : M idx :=
+  match n with
+  | O      => App (const 0, nil)
+  | S n'   => prev   <- Load_of_idx n' addr;
+              offset <- App (const (8 * Z.of_nat n'), nil);
+              addr_k <- App (add sa, [addr; offset]);
+              chunk  <- Load64 addr_k;
+              App (set_slice (64 * N.of_nat n') 64, [prev; chunk])
+  end.
+
 (* 128-bit load from an already-computed address idx: 2x Load64 + set_slice chain *)
 Definition Load128_of_idx {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (addr : idx) : M idx :=
-  lo <- Load64 addr; (* bottom 64 bits *)
-  eight <- App (const 8, nil);
-  addr_hi <- App (add sa, [addr; eight]); (* addr + 8 *)
-  hi <- Load64 addr_hi; (* top 64 bits *)
-  zero <- App (const 0, nil);
-  v <- App (set_slice 0 64, [zero; lo]);
-  App (set_slice 64 64, [v; hi]).
+  Load_of_idx 2 addr.
 
 (* 256-bit load from an already-computed address idx: 4x Load64 + set_slice chain *)
 Definition Load256_of_idx {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (addr : idx) : M idx :=
-  lo0 <- Load64 addr;
-  eight <- App (const 8, nil);
-  addr1 <- App (add sa, [addr; eight]);
-  lo1 <- Load64 addr1;
-  sixteen <- App (const 16, nil);
-  addr2 <- App (add sa, [addr; sixteen]);
-  lo2 <- Load64 addr2;
-  twentyfour <- App (const 24, nil);
-  addr3 <- App (add sa, [addr; twentyfour]);
-  lo3 <- Load64 addr3;
-  zero <- App (const 0, nil);
-  v0 <- App (set_slice 0 64, [zero; lo0]);
-  v1 <- App (set_slice 64 64, [v0; lo1]);
-  v2 <- App (set_slice 128 64, [v1; lo2]);
-  App (set_slice 192 64, [v2; lo3]).
+  Load_of_idx 4 addr.
 
 Definition Load {opts : symbolic_options_computed_opt} {descr:description} {s : OperationSize} {sa : AddressSize} (a : MEM) : M idx :=
   let sz := Syntax.operand_size a s in

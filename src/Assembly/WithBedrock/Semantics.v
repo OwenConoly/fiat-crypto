@@ -92,6 +92,7 @@ Require Import bedrock2.Memory. Import coqutil.Map.Memory.
 Require coqutil.Word.Naive coqutil.Map.SortedListWord.
 Definition mem_state := (SortedListWord.map (Naive.word 64) Byte.byte).
 
+Print word.of_Z.
 Definition get_mem (st : mem_state) (addr : Z) (nbytes : nat) : option Z
   := (bs <- load_bytes st (word.of_Z addr) nbytes; Some (LittleEndianList.le_combine bs))%option.
 Definition set_mem (st : mem_state) (addr : Z) (nbytes : nat) (v : Z) : option mem_state
