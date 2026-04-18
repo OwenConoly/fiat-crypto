@@ -297,22 +297,22 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
     SetOperand sa 64 st dst v
   | vpaddq, [dst; src1; src2] => (* vector packed add quadword *)
 		let lane_add := (fun a b => Z.land (a + b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_add 4 64
+      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_add (N.to_nat (N.div s 64)) 64
   | vpsubq, [dst; src1; src2] =>
 		let lane_sub := (fun a b => Z.land (a - b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_sub 4 64
+      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_sub (N.to_nat (N.div s 64)) 64
   | vpandq, [dst; src1; src2] =>
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 Z.land 4 64
+      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 Z.land (N.to_nat (N.div s 64)) 64
   | vporq, [dst; src1; src2] =>
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 Z.lor 4 64
+      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 Z.lor (N.to_nat (N.div s 64)) 64
   | vpxorq, [dst; src1; src2] =>
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 Z.lxor 4 64
+      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 Z.lxor (N.to_nat (N.div s 64)) 64
   | vpaddd, [dst; src1; src2] =>
       SemanticVector.DenoteVectorBinOp sa s st dst src1 src2
-        (fun a b => Z.land (a + b) (Z.ones 32)) 8 32
+        (fun a b => Z.land (a + b) (Z.ones 32)) (N.to_nat (N.div s 32)) 32
   | vpsubd, [dst; src1; src2] =>
       SemanticVector.DenoteVectorBinOp sa s st dst src1 src2
-        (fun a b => Z.land (a - b) (Z.ones 32)) 8 32
+        (fun a b => Z.land (a - b) (Z.ones 32)) (N.to_nat (N.div s 32)) 32
   | vpbroadcastq, [dst; src] =>
     v <- DenoteOperand sa 64 st src;
     let v64 := Z.land v (Z.ones 64) in

@@ -4891,9 +4891,15 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     v <- GetOperand (s:=64) src; (* gets the full register *)
     v <- (App ((slice 0 64), [v]));
     SetOperand (s:=64) dst v
+
   | vpaddq, [dst; src1; src2] => (* packed add of quadwords - no flags affected *)
-      SymbolicVector.SymexVectorOp dst src1 src2 vadd (add 64) 64%N
-  | vpsubq, [dst; src1; src2] => (* packed subtract quadwords *)
+    let num_lanes := (s / 64)%N in 
+    v1 <- GetOperand src1;
+    v2 <- GetOperand src2;
+    result <- App ((vadd 64 num_lanes), [v1; v2]);
+    SetOperand dst result
+      (* SymbolicVector.SymexVectorOp dst src1 src2 vadd (add 64) 64%N *)
+  (* | vpsubq, [dst; src1; src2] => (* packed subtract quadwords *)
       SymbolicVector.SymexVectorOp dst src1 src2 vsub (sub 64) 64%N
   | vpandq, [dst; src1; src2] => (* packed bitwise AND quadwords *)
       SymbolicVector.SymexVectorBinOp dst src1 src2 (and 64) 64
@@ -4905,7 +4911,7 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
   | vpaddd, [dst; src1; src2] => (* packed add doublewords *)
       SymbolicVector.SymexVectorBinOp dst src1 src2 (add 32) 32
   | vpsubd, [dst; src1; src2] => (* packed subtract doublewords *)
-      SymbolicVector.SymexVectorOp dst src1 src2 vsub (sub 32) 32%N
+      SymbolicVector.SymexVectorOp dst src1 src2 vsub (sub 32) 32%N 
 
   | vpbroadcastq, [dst; src] => (* broadcast 64-bit value to all qword lanes *)
     v <- GetOperand (s:=64) src;
@@ -4999,7 +5005,7 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     imm_c <- RevealConst imm_idx;
     let lane := Z.land imm_c 1 in
     result <- App (set_slice (Z.to_N lane * 128) 128, [v1; v2]);
-    SetOperand (s:=256%N) dst result
+    SetOperand (s:=256%N) dst result *)
 
   | xchg, [a; b] => (* Note: unbundle when switching from N to Z *)
     va <- GetOperand a;

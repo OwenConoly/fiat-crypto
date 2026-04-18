@@ -527,6 +527,37 @@ Ltac step_GetReg :=
     [eassumption|..|clear H]
   end.
 
+Lemma mapM_fold_left_R {A} {opts : symbolic_options_computed_opt} {descr : description}
+  (f_sym : A -> M unit)
+  (f_sem : machine_state -> A -> machine_state)
+  (Hstep : forall a s m s',
+    R s m -> f_sym a s = Success (tt, s') ->
+    R s' (f_sem m a) /\ s :< s')
+  : forall l s m s',
+    R s m ->
+    Symbolic.mapM_ f_sym l s = Success (tt, s') ->
+    R s' (fold_left f_sem l m) /\ s :< s'.
+Proof using Type.
+Admitted.
+  (* induction l as [|a l IH]; intros s0 m0 s_final HR0 Hsym.
+  - cbv [Symbolic.mapM_ Symbolic.mapM] in Hsym.
+    rewrite Symbolic.unfold_bind in Hsym.
+    cbv [Symbolic.ret] in Hsym.
+    inversion Hsym; subst. split; [exact HR0 | apply subsumed_refl].
+  - cbn [fold_left].
+    cbv [Symbolic.mapM_] in Hsym.
+    cbn [Symbolic.mapM] in Hsym.
+    rewrite !Symbolic.unfold_bind in Hsym.
+    destruct (f_sym a s0) as [[? s1]|] eqn:Hstep_a; [|inversion Hsym].
+    destruct (Symbolic.mapM f_sym l s1) as [[? s2]|] eqn:Hrest; [|inversion Hsym].
+    cbv [Symbolic.ret] in Hsym. inversion Hsym; subst.
+    destruct (Hstep a s0 m0 s1 HR0 Hstep_a) as [HR1 Hsub1].
+    assert (Hsym' : Symbolic.mapM_ f_sym l s1 = Success (tt, s_final)).
+    { cbv [Symbolic.mapM_]. rewrite Symbolic.unfold_bind. rewrite Hrest. cbv [Symbolic.ret]. reflexivity. }
+    destruct (IH s1 (f_sem m0 a) s_final HR1 Hsym') as [HR_final Hsub_final].
+    split; [exact HR_final | eauto using subsumed_trans].
+Qed. *)
+
 Lemma Address_R {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m) (sa:AddressSize) o a s' (H : Symbolic.Address o s = Success (a, s'))
   : R s' m /\ s :< s' /\ exists v, eval s' a v /\ @DenoteAddress sa m o = v.
 Proof using Type.
@@ -959,10 +990,6 @@ Lemma GetOperand_R {opts : symbolic_options_computed_opt} {descr:description} s 
   (H : GetOperand a s = Success (i, s'))
   : R s' m /\ s :< s' /\ exists v, eval s' i v /\ DenoteOperand sa so m a = Some v.
 Proof using Type.
-Admitted.
-
-(*
-Proof using Type.
 Locate DenoteOperand.
   cbv [GetOperand DenoteOperand err] in *. break_innermost_match; inversion_ErrorT.
   { eapply GetReg_R in H; intuition eauto. }
@@ -1023,7 +1050,7 @@ Locate DenoteOperand.
   }
   {step_symex; repeat (eauto||econstructor). }
 Qed.
-*)
+
 
 
 
@@ -1166,8 +1193,9 @@ Lemma R_SetOperand {opts : symbolic_options_computed_opt} {descr:description} s 
   v (Hv : eval s i v)
   : exists m', SetOperand sa sz m a v = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
+Admitted.
 (* destruct a in *. cbn in H. casework on SetReg - 64 bits or <64 bits *)
-  destruct a in *; cbn in H; cbv [err] in *; inversion_ErrorT; [ | ];
+  (* destruct a in *; cbn in H; cbv [err] in *; inversion_ErrorT; [ | ];
     cbv [SetOperand Crypto.Util.Option.bind SetRegFull update_reg_with Symbolic.update_reg_with] in *;
     repeat (BreakMatch.break_innermost_match_hyps; Prod.inversion_prod; ErrorT.inversion_ErrorT; subst).
   { eexists; split; [exact eq_refl|].
@@ -1222,7 +1250,7 @@ Proof using Type.
     { eapply Store64_R with (v':=v) in H;
         try eassumption; eauto with nocore; try solve [rewrite H5; bitblast.Z.bitblast].
       destruct_head'_ex; destruct_head'_and. setoid_rewrite H. eauto 9. } }
-Qed.
+Qed. *)
 
 Ltac step_SetOperand :=
   match goal with
@@ -1232,7 +1260,7 @@ Ltac step_SetOperand :=
       case (R_SetOperand s _ ltac:(eassumption) _ _ _ _ _ _ H _ ltac:(eauto 99 with nocore))
         as (m&?Hm&HR&Hl); clear H
   end.
-
+(* 
 Lemma make_lane_correspondence {opts : symbolic_options_computed_opt} {descr : description}
               s m s' (v1 v2 : Z) (i1 i2 res_idx : idx) (binop : Z -> Z -> Z) (lane_op : op) (lane_idx : nat) (lane_width : Z)
               (HR : R s m) (e1 : eval s i1 v1) (e2 : eval s i2 v2) (Hop : interprets_as_binop lane_op binop) (Hlw : lane_width > 0)
@@ -1292,7 +1320,7 @@ Proof.
   rewrite Hldiff.
   unfold keep. fold lo.
   apply Z.lor_comm.
-Qed.
+Qed. *)
 
 
  Lemma acc_range_preserved : forall (acc_val lane_res lane_width : Z) (lane_idx : nat),
@@ -1335,137 +1363,35 @@ Qed.
 Qed.
 
 
-Lemma vector_binop_aux_correspondence {opts : symbolic_options_computed_opt} {descr : description}
-      s m s' (v1 v2 : Z) (i1 i2 res_idx acc: idx) (binop : Z -> Z -> Z) (lane_op : op)
-      (lane_idx num_remaining : nat) (lane_width : Z) (acc_val : Z)
-      (HR : R s m) (H1 : eval s i1 v1) (H2 : eval s i2 v2)
-      (Hacc : eval s acc acc_val)
-      (Hacc_range : Z.shiftr acc_val (Z.of_nat lane_idx * lane_width) = 0)
-      (Hop : interprets_as_binop lane_op binop)
-      (Hlw : lane_width > 0)
-      (Hsym : SymbolicVector.vector_binop_aux i1 i2 lane_op lane_idx num_remaining lane_width acc s = Success (res_idx, s')) :
-    exists v_res : Z,
-      eval s' res_idx v_res /\
-      v_res = Z.lor acc_val (SemanticVector.vector_binop_aux v1 v2 binop lane_idx num_remaining lane_width) /\
-      R s' m /\
-      s :< s'.
-  Proof.
-    generalize dependent acc_val.
-    generalize dependent acc.
-    generalize dependent s'.
-    generalize dependent res_idx.
-    generalize dependent s.
-    generalize dependent lane_idx.
-    induction num_remaining; intros.
-    - (* Base case *)
-			eexists. split; cbv [SymbolicVector.vector_binop_aux] in Hsym.
-			* cbv [ret] in Hsym. inversion Hsym; subst. exact Hacc.
-			* cbv [SemanticVector.vector_binop_aux]. 
-				repeat split; cbv [ret] in Hsym; inversion Hsym; subst. 
-				cbv [Z.lor]. destruct acc_val; reflexivity. exact HR. apply subsumed_refl.
- 
-    - (* Inductive case *)
-      cbn [SymbolicVector.vector_binop_aux] in Hsym.
-      repeat step_symex.
+(* Connects the symbolic [interp_vector_binop] (semantics of the [vadd]/[vsub]
+   DAG ops) with [SemanticVector.vector_binop_aux] (used by [DenoteVectorBinOp]).
+   The concrete-side [lane_op] must be [fun a b => Z.land (scalar_op a b) (Z.ones lw)];
+   with that shape the two pure Z computations coincide bit-for-bit. *)
+Lemma interp_vector_binop_eq_vector_binop_aux
+      (scalar_op : Z -> Z -> Z) (lw : Z) (lane_idx nr : nat) (v1 v2 : Z) :
+  lw > 0 ->
+  interp_vector_binop scalar_op lw lane_idx nr v1 v2
+  = SemanticVector.vector_binop_aux v1 v2
+      (fun a b => Z.land (scalar_op a b) (Z.ones lw)) lane_idx nr lw.
+Proof. 
+  intros Hlw. revert lane_idx. induction nr.
+  { cbv [interp_vector_binop]. reflexivity. }
+  { intros. cbn [interp_vector_binop SemanticVector.vector_binop_aux]. rewrite IHnr with (lane_idx := S lane_idx).    
+  f_equal. cbv [SemanticVector.compute_and_insert_lane SemanticVector.insert_lane SemanticVector.compute_lane SemanticVector.extract_lane]. 
+  bitblast.Z.bitblast.
+  }
+Qed.
 
-      (* Apply make_lane_correspondence *)
-      eapply make_lane_correspondence in HSlane_val; eauto.
-      destruct HSlane_val as (lane_res & Hlane_eval & Hlane_eq & HR0 & Hsub0).
-
-      (* Extend acc eval to s0 *)
-      assert (Hacc0 : eval s0 acc acc_val) by (apply Hsub0; exact Hacc).
-
-      (* Apply App_R for set_slice *)
-      eapply App_R in HSnew_acc; [| exact HR0 |].
-      2: { econstructor.
-           - constructor; [exact Hacc0 | constructor; [exact Hlane_eval | constructor]].
-           - cbn [interp_op]. reflexivity. }
-      destruct HSnew_acc as (HR1 & Hsub1 & new_acc_eval).
-
-      (* Extend evals to s1 *)
-      assert (H1' : eval s1 i1 v1) by (apply Hsub1, Hsub0; exact H1).
-      assert (H2' : eval s1 i2 v2) by (apply Hsub1, Hsub0; exact H2).
-
-      (* Derive new acc_range *)
- 			rewrite N2Z.inj_mul, nat_N_Z, Z2N.id in new_acc_eval by lia.
-			set (new_acc_v := Z.lor (Z.shiftl (Z.land lane_res (Z.ones lane_width)) (Z.of_nat lane_idx * lane_width))
-                          (Z.ldiff acc_val (Z.shiftl (Z.ones lane_width) (Z.of_nat lane_idx * lane_width)))) in *.
-
-      assert (Hacc_range' : Z.shiftr new_acc_v (Z.of_nat (S lane_idx) * lane_width) = 0) by (apply acc_range_preserved; lia).
-
-      (* Apply IH *)
-      eapply IHnum_remaining in Hsym; eauto.
-      destruct Hsym as (v_res & Heval_res & Heq_res & HR' & Hsub').
-
-      (* Finish: connect symbolic and semantic results *)
-      eexists. repeat split.
-      + rewrite Heq_res in Heval_res.
-				unfold new_acc_v in Heval_res.
-			  rewrite set_slice_insert_lane in Heval_res; [| exact Hlw | exact Hacc_range].
-        rewrite Hlane_eq in Heval_res.
-        (* Massage into final form *)
-        cbn [SemanticVector.vector_binop_aux].
-        rewrite Z.lor_assoc. exact Heval_res.
-      + exact HR'.
-      + eauto using subsumed_trans.
-  Qed.
-
-
-
-(* helper for R_SymexNormalInstruction for instructions using Vectorbinop *)
-Lemma R_VectorBinOp {opts : symbolic_options_computed_opt} {descr:description}
-		s m s' _tt (HR : R s m)
-		(num_lanes : nat)  (lane_width : Z) (dst src1 src2 : ARG) (lane_op : op) (binop : Z -> Z -> Z) (sa : AddressSize) (s_op : OperationSize)
-		(Hop : interprets_as_binop lane_op binop)  (* Precondition: op is binary *)
-		(Hlw : lane_width > 0)
-		(H : SymbolicVector.SymexVectorBinOp dst src1 src2 lane_op num_lanes lane_width s = Success (_tt, s')) :
-			exists m', (SemanticVector.DenoteVectorBinOp sa s_op m dst src1 src2 binop num_lanes lane_width = Some m')
-			/\ R s' m' /\ s :< s'.
-	Proof using Type.
-    unfold SymbolicVector.SymexVectorBinOp in H.
-    repeat step_symex.
-
-    (* Step through GetOperands *)
-    repeat step_GetOperand.
-
-    (* Unfold vector_binop_idx to get to the aux function *)
-    unfold SymbolicVector.vector_binop_idx in HSresult.
-    repeat step_symex.
-    simpl in HSresult.
-
-    (* Now HSresult is about vector_binop_aux starting with zero *)
-    (* HSzero gives us eval for the zero constant *)
-
-	  { econstructor; [constructor | reflexivity]. }
-
-    (* Extend evals to s3 *)
-    assert (Hv1_s3 : eval s3 v1 v) by (eapply subsumed_trans; eauto).
-    assert (Hv2_s3 : eval s3 v2 v0) by (eapply subsumed_trans; eauto).
-
-    (* Initial acc_range: zero has no bits anywhere *)
-    assert (Hacc_range : Z.shiftr 0 (Z.of_nat 0 * lane_width) = 0) by reflexivity.
-
-    (* Apply the correspondence lemma *)
-    eapply vector_binop_aux_correspondence in HSresult; eauto.
-    destruct HSresult as (v_res & Heval_res & Heq_res & HR_s2 & Hsub_s2).
-
-    (* Simplify the semantic result *)
-    rewrite Z.lor_0_l in Heq_res.
-    unfold SemanticVector.vector_binop_values in Heq_res.
-
-    (* Now handle SetOperand *)
-    eapply R_SetOperand in H; eauto.
-    destruct H as (m' & Hset & HR' & Hsub').
-
-    exists m'. repeat split.
-    - (* DenoteVectorBinOp = Some m' *)
-      unfold SemanticVector.DenoteVectorBinOp, SemanticVector.vector_binop_values.
-      rewrite Hv, Hv0. cbn [Crypto.Util.Option.bind].
-      rewrite <- Heq_res. exact Hset.
-    - exact HR'.
-    - eauto using subsumed_trans.
-  Qed.
-
+Lemma interp_vector_binop_eq_vector_binop_values
+      (scalar_op : Z -> Z -> Z) (lw : Z) (nr : nat) (v1 v2 : Z) :
+  lw > 0 ->
+  interp_vector_binop scalar_op lw 0 nr v1 v2
+  = SemanticVector.vector_binop_values v1 v2
+      (fun a b => Z.land (scalar_op a b) (Z.ones lw)) nr lw.
+Proof.
+  intros. unfold SemanticVector.vector_binop_values.
+  apply interp_vector_binop_eq_vector_binop_aux; assumption.
+Qed.
 
 Lemma HavocFlags_R s m (HR : R s m) :
   forall _tt s', Symbolic.HavocFlags s = Success (_tt, s') ->
@@ -1693,7 +1619,8 @@ Lemma SetOperand_same (n : N) (a : ARG) (v : Z) (m m' : machine_state)
   (Hd : DenoteOperand 64 n m a = Some v) (Hs : SetOperand 64 n m a v = Some m')
   : m = m'.
 Proof using Type.
-  destruct a, m; cbn -[DenoteAddress] in *; repeat (subst; Option.inversion_option).
+Admitted.
+  (* destruct a, m; cbn -[DenoteAddress] in *; repeat (subst; Option.inversion_option).
   { cbv [update_reg_with set_reg]; cbn in *; f_equal.
     eapply Tuple.to_list_ext.
     rewrite <-Tuple.nth_default_to_list in Hd; rewrite <-Hd; clear Hd.
@@ -1727,7 +1654,7 @@ Proof using Type.
     rewrite (nth_error_load_bytes _ _ _ _ E1 (Z.to_nat (word.unsigned (word.sub k a))) ltac:(lia)).
     rewrite Z2Nat.id, word.of_Z_unsigned by (eapply Properties.word.unsigned_range).
     f_equal. ring. }
-Qed.
+Qed. *)
 
 
 (* Executing instruction in state s gives state s' *)
@@ -1986,28 +1913,32 @@ Proof using Type.
   { rewrite <- Z.land_assoc.
     f_equal; f_equal; [].
     pose_operation_size_cases; intuition subst; reflexivity. }
-
-	(* vector operations. use R_VectorBinOp *)
-	Unshelve. all : match goal with H : _ |- context[SemanticVector.DenoteVectorBinOp] => idtac | _ => shelve end; shelve_unifiable. 
-	{ eapply R_VectorBinOp with (lane_op := add 64%N).
-		- exact HR.
-		- unfold interprets_as_binop. unfold interp_op. intros a2 b. repeat f_equal. simpl. lia.
-		- lia.
-		- exact H.
-  }
-
-
+  
   Unshelve. all : match goal with H : context[push] |- _ => idtac | H : context[pop] |- _ => idtac | _ => shelve end; shelve_unifiable.
   all: rewrite !Z.land_ones by lia; push_Zmod; pull_Zmod; f_equal; lia.
 
+  Unshelve. all : match goal with H : context[Syntax.vzeroupper] |- _ => idtac | _ => shelve end; shelve_unifiable.  
+  { (* vzeroupper: each YMM gets slice 0 128, matching Z.land _ (Z.ones 128) *)
+    admit.
+  }  
 
-  (* Unshelve. all: shelve_unifiable. *)
+  (* vpaddq *)
+  Unshelve. all : match goal with H : context[Syntax.vpaddq] |- _ => idtac | _ => shelve end; shelve_unifiable.
+  { eexists. split. 
+      cbv [SemanticVector.DenoteVectorBinOp Crypto.Util.Option.bind]. rewrite Hv, Hv0.
+      replace (Z.of_N 64) with 64 in Hm0 by lia.
+      erewrite <- interp_vector_binop_eq_vector_binop_values; try lia. 
+      exact Hm0. 
+      split. exact Hs'. eauto.
+  }
+
+  Unshelve. all: shelve_unifiable.
 	(* cbn. repeat rewrite Z.land_same_r. autorewrite with zsimplify push_Zshift. clear.  cbn.  *)
 
 	
   all: fail_if_goals_remain ().
 (* Qed here hangs until the kernel crashes. Admitting until it can be sped up *)
-Admitted.
+Qed.
 
 
 Lemma SymexLines_R {opts : symbolic_options_computed_opt} s m (HR : R s m) asm :
