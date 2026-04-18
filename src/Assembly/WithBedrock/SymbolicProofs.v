@@ -95,11 +95,15 @@ Context (d : dag).
 Local Notation eval := (Symbolic.eval G d).
 Check eval. (* eval i v evaluates whether idx x evals to value v in the context of G and d *)
 
-(* given idx i and value v, check if i evals to v *)
-Definition R_reg (x : option idx) (v : Z) : Prop :=
-  (forall i, x = Some i -> eval i v) /\ (v = Z.land v (Z.ones (Z.of_N max_register_bits))). 
-Definition R_regs : Symbolic.reg_state -> Semantics.reg_state -> Prop :=
-  Tuple.fieldwise R_reg.
+
+Definition R_reg (x : option idx) (v : Z) (width : N)  : Prop :=                                                    
+  (forall i, x = Some i -> eval i v) /\ (v = Z.land v (Z.ones (Z.of_N width))).                                    
+                                                                                                                     
+Definition R_regs (sr : Symbolic.reg_state) (mr : Semantics.reg_state) : Prop :=
+  let widths := List.map (fun r => reg_size r) widest_registers in                                                 
+  Forall2 (fun w '(x, v) => R_reg x v w)                          
+    widths                                                                                                         
+    (List.combine (Tuple.to_list _ sr) (Tuple.to_list _ mr)).  
 
 Definition R_flag (x : option idx) (ob : option bool) : Prop :=
   forall i, x = Some i -> exists b, eval i (Z.b2z b) /\ ob = Some b.
@@ -240,8 +244,8 @@ Proof using Type.
     intuition eauto using R_flag_subsumed.
 Qed.
 
-Lemma R_reg_subsumed d s m (HR : R_reg d s m) d' (Hlt : d :< d')
-  : R_reg' d' s m.
+Lemma R_reg_subsumed d s m w (HR : R_reg d s m w) d' (Hlt : d :< d')
+  : R_reg' d' s m w.
 Proof using Type. cbv [R_reg] in *; intuition eauto. Qed.
 Check R_reg_subsumed.
 
@@ -250,13 +254,10 @@ Check Tuple.fieldwise_Proper.
 Lemma R_regs_subsumed d s m (HR : R_regs d s m) d' (Hlt : d :< d')
   : R_regs' d' s m.
 Proof using Type.
-  unfold R_regs, R_regs' in *.
-  eapply Tuple.fieldwise_Proper.
-  { intros x v HRxv.
-    eapply R_reg_subsumed; eauto. }
-  { reflexivity. }
-  { reflexivity. }
-  { exact HR. }
+  unfold R_regs, R_regs' in *. Search Forall2. Check Forall2_impl. Print Forall2.
+  eapply Forall2_impl; [| exact HR].
+  intros. destruct b as [x v].
+  eapply R_reg_subsumed; eauto. 
 Qed.
 
 Local Existing Instance Naive.word64_ok.
@@ -337,27 +338,46 @@ Proof using Type.
   2: { epose proof Properties.word.eqb_spec. exact H. }
 Qed.
 
-Lemma get_reg_R_regs d s m (HR : R_regs d s m) ri :
-  forall i, Symbolic.get_reg s ri = Some i ->
-  exists v, eval d i v /\ Tuple.nth_default 0 (N.to_nat ri) m = v.
+Lemma R_regs_nth d s m (HR : R_regs d s m) ri i                                                                    
+  (Hs : nth_error (Tuple.to_list _ s) (N.to_nat ri) = Some (Some i)) :                                             
+  exists v, eval d i v /\ nth_error (Tuple.to_list _ m) (N.to_nat ri) = Some v.                                    
 Proof using Type.
+  unfold R_regs in HR.                                                                                             
+  rewrite Forall.Forall2_forall_iff_nth_error in HR.
+  specialize (HR (N.to_nat ri)).                                                                                   
+  rewrite nth_error_map, ListUtil.nth_error_combine, Hs in HR.                                                              
+  destruct (nth_error (Tuple.to_list _ m) (N.to_nat ri)) as [v|] eqn:Hm.
+  - (* Some v — main case *)
+    cbn [Crypto.Util.Option.option_eq] in HR. exists v. split; try reflexivity.
+    destruct (nth_error widest_registers (N.to_nat ri)) as [wr|] eqn:Hwr;
+    unfold R_reg in HR; destruct HR. apply H; reflexivity.
+    exfalso.                                                  
+    apply nth_error_None in Hwr.                                                              
+    assert (length widest_registers = 100)%nat by reflexivity.                                                         
+    assert (N.to_nat ri < length (Tuple.to_list 100 m))%nat
+      by (eapply nth_error_Some; congruence).
+    rewrite Tuple.length_to_list in *.          
+    lia. 
+  - (* None — contradicts Hs via equal lengths *)
+    exfalso.                                                                                                         
+    apply nth_error_None in Hm.
+    assert (N.to_nat ri < length (Tuple.to_list 100 s))%nat                                                            
+    by (eapply nth_error_Some; congruence).
+    rewrite !Tuple.length_to_list in *.                                                                                
+    lia.                                                                                                                          
+Qed. 
+
+Lemma get_reg_R_regs d s m (HR : R_regs d s m) ri :
+  forall i, Symbolic.get_reg s ri = Some i ->                                                                      
+  exists v, eval d i v /\ Tuple.nth_default 0 (N.to_nat ri) m = v.
+Proof using Type.                                                                                                  
   cbv [Symbolic.get_reg]; intros.
-  rewrite <-Tuple.nth_default_to_list in H.
-  cbv [nth_default] in H; BreakMatch.break_match_hyps; subst; [|solve[congruence] ].
-  destruct s,m; cbn in *; cbv [R_regs R_reg] in *.
-  eapply Tuple.fieldwise_to_list_iff in HR.
-  eapply Forall.Forall2_forall_iff_nth_error in HR; cbv [Crypto.Util.Option.option_eq] in HR.
-
-  rewrite Heqo in HR.
-  BreakMatch.break_match_hyps; [|solve[contradiction]].
-  specialize (proj1 HR _ eq_refl).
-  eexists; split; [eassumption|].
-
-  rewrite <-Tuple.nth_default_to_list.
-  cbv [nth_default].
-  rewrite Heqo0.
-  trivial.
-Qed.
+  rewrite <-Tuple.nth_default_to_list in H.                                                                        
+  cbv [nth_default] in H; BreakMatch.break_match_hyps; subst; [|solve[congruence]].
+  case (R_regs_nth d s m HR ri i Heqo) as (v & Hv & Hm).                                                           
+  exists v; split; [exact Hv|].                                                                                    
+  rewrite <-Tuple.nth_default_to_list. cbv [nth_default]. rewrite Hm. trivial.                                     
+Qed. 
 
 Lemma get_reg_R s m (HR : R s m) ri :
   forall i, Symbolic.get_reg s ri = Some i ->
@@ -1060,6 +1080,115 @@ Ltac step_GetOperand :=
     case (GetOperand_R s _ ltac:(eassumption) _ _ ltac:(reflexivity) _ _ _ H) as (Hs'&Hl&(v&Hi&Hv)); clear H
   end.
 
+Import Crypto.Util.ListUtil.
+
+Lemma combine_update_nth {A B} n (f : A -> A) (g : B -> B) xs ys :
+  length xs = length ys ->
+  combine (update_nth n f xs) (update_nth n g ys) = update_nth n (fun '(a, b) => (f a, g b)) (combine xs ys).
+Proof.
+  revert n ys; induction xs as [|x xs IH]; destruct ys as [|y ys]; cbn; intros;
+    try lia; destruct n; cbn; try reflexivity.
+  - f_equal. apply IH. lia.
+Qed.
+
+Lemma Forall2_update_nth_r {A B} (R : A -> B -> Prop) n f xs ys :                                                  
+  Forall2 R xs ys ->                                                                                               
+  (forall x y, nth_error xs n = Some x -> nth_error ys n = Some y -> R x y -> R x (f y)) ->                        
+  Forall2 R xs (update_nth n f ys).         
+Proof.                                                                                                             
+  intro H; revert n; induction H; intros [|n]; cbn.
+  - constructor.                                                                                                   
+  - constructor; auto.
+  - constructor; [eapply H1; eauto; reflexivity | auto].                                                           
+  - constructor; [auto | apply IHForall2; intros; eapply H1; eauto].
+Qed.    
+
+(* 1. Full-width register write *)                                                                                 
+Lemma R_SetReg_full {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m) r i _tt s'
+  (Hoffset : reg_offset r = 0%N)
+  (Hwidest : reg_size r = widest_reg_size_of r)
+  (H : Symbolic.SetReg r i s = Success (_tt, s'))
+  v (Hv : eval s i v)
+  : exists m', Some (update_reg_with m (fun rs => set_reg rs r v)) = Some m'
+    /\ R s' m' /\ s :< s'.                                       
+Proof using Type.
+  eexists. repeat split.
+  {
+   unfold SetReg in H. unfold set_reg, index_and_shift_and_bitcount_of_reg in *.
+    rewrite Hoffset, Hwidest, N.eqb_refl, N.eqb_refl in *. simpl in H.
+    step_symex.
+    cbn [fst snd] in H. cbv [SetRegFull] in H.
+    inversion_ErrorT; Prod.inversion_prod; subst.
+    rewrite !Z.shiftl_0_r.
+    step_App.
+    { repeat eauto || econstructor. }
+    rewrite !Z.shiftr_0_r in Hv0.
+
+    destruct s0 as [d0 sr0 sf0 sm0]; destruct Hs0 as (Hok0 & Hregs0 & Hflags0 & Hmem0).
+    cbv [R update_reg_with Symbolic.update_reg_with]; cbn.
+    split; [| split; [ |split]]; eauto.
+    unfold R_regs, Symbolic.set_reg.
+
+    unshelve erewrite 2Tuple.from_list_default_eq, 2Tuple.to_list_from_list;
+    try solve [rewrite ?Crypto.Util.ListUtil.length_set_nth,
+              ?Crypto.Util.ListUtil.length_update_nth,                                                              
+              ?Tuple.length_to_list; trivial].
+
+    unfold ListUtil.set_nth. rewrite combine_update_nth.
+    2: repeat rewrite Tuple.length_to_list; reflexivity.
+    eapply Forall2_update_nth_r.
+    { exact Hregs0. }
+    intros x_old v_old Hw Hy HR_old. 
+    destruct v_old as [sym_old conc_old].
+
+    cbv [R_reg] in *. destruct HR_old as [_ Hbits_old].                                                                
+    (* extract width from Hw *)                                                                                        
+    rewrite nth_error_map in Hw.                                                                                       
+    destruct (nth_error widest_registers (N.to_nat (reg_index r))) as [wr|] eqn:Hwr;                                   
+      [cbn in Hw; inversion Hw; subst x_old | discriminate Hw].                                                        
+    (* show widest_reg_size_of r = reg_size wr *)                                                                      
+    assert (Hwidth : widest_reg_size_of r = reg_size wr).                                                              
+    { unfold widest_reg_size_of, widest_register_of_index, widest_register_of_index_opt.                               
+      replace (List.map (@snd _ _) wide_reg_index_pairs) with widest_registers                                         
+        by reflexivity.  (* both are Eval lazy, should reduce *)                                                       
+      rewrite Hwr. reflexivity. }               
+    (* Z.ldiff conc_old ... = 0 because conc_old fits in width bits *)                                                 
+    assert (Hldiff : Z.ldiff conc_old (Z.ones (Z.of_N (widest_reg_size_of r))) = 0).
+    { rewrite Hwidth, Hbits_old. bitblast.Z.bitblast. }                                                                         
+    rewrite Hldiff, Z.lor_0_r.              
+    split.                                                                                                             
+    - intros i0 Hi0; inversion Hi0; subst. exact Hv0.                                                                  
+    - bitblast.Z.bitblast.
+  }
+  {
+    unfold SetReg in H. unfold set_reg, index_and_shift_and_bitcount_of_reg in *.
+    rewrite Hoffset, Hwidest, N.eqb_refl, N.eqb_refl in *. simpl in H.
+    step_symex.
+    cbn [fst snd] in H. cbv [SetRegFull] in H.
+    inversion_ErrorT; Prod.inversion_prod.
+    step_App. { repeat eauto || econstructor. }
+    subst. simpl. exact Hls0.
+  }
+Qed.
+  
+(* 2. Partial register write *)                                                                                    
+Lemma R_SetReg_partial {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m) r i _tt s'                                                  
+  (Hpartial : ((reg_offset r =? 0)%N && (reg_size r =? widest_reg_size_of r)%N)%bool = false)                      
+  (H : Symbolic.SetReg r i s = Success (_tt, s'))                                                                  
+  v (Hv : eval s i v)                   
+  : exists m', Some (update_reg_with m (fun rs => set_reg rs r v)) = Some m'                                       
+  /\ R s' m' /\ s :< s'.                                                                                         
+Proof using Type.
+  
+  (* 3. Memory write *)                                                                                              
+Lemma R_SetMem {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m) (sz : OperationSize) (sa : AddressSize)                             
+  a i _tt s'                                
+  (H : Symbolic.Store a i s = Success (_tt, s'))                                                                   
+  v (Hv : eval s i v)
+  : exists m', SetMem m (DenoteAddress sa m a) (N.to_nat (operand_size a sz / 8)) v = Some m'                      
+  /\ R s' m' /\ s :< s'.  
+Proof. Admitted.
+
 (* Setting address a to v gives state s' and i evals to v in s *)
 (* then there exists a new machine state m' corresponding to s' s.t. setting a to v in m gives m' *)
 (* note: do the two SetOperand both truncate inputs or not?... *)
@@ -1068,11 +1197,61 @@ Lemma R_SetOperand {opts : symbolic_options_computed_opt} {descr:description} s 
   v (Hv : eval s i v)
   : exists m', SetOperand sa sz m a v = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
+  destruct a; cbn in H.                                                                                            
+    - (* reg *) unfold SetReg in H.           
+      destruct ((reg_offset r =? 0)%N && (reg_size r =? widest_reg_size_of r)%N)%bool eqn:Hb.
+      + (* full *) apply andb_prop in Hb. destruct Hb. apply N.eqb_eq in H0, H1. 
+        eapply R_SetReg_full; eauto.
+        unfold SetReg, index_and_shift_and_bitcount_of_reg. rewrite H0, H1, N.eqb_refl, N.eqb_refl. simpl. 
+        rewrite <- H1. exact H.
+      + (* partial *) eapply R_SetReg_partial; eauto.
+        unfold SetReg, index_and_shift_and_bitcount_of_reg. rewrite Hb. exact H.
+    - (* mem *) eapply R_SetMem; eauto.                                                                              
+    - (* const *) cbn in H; inversion H.
+    - cbv [err] in H. discriminate H.
+Qed. 
 
-(* destruct a in *. cbn in H. casework on SetReg - 64 bits or <64 bits *)
-destruct a in *; cbn in H; cbv [err] in *; inversion_ErrorT; [ | ];
+
+  destruct a in *; cbn in H; cbv [err] in *; inversion_ErrorT; [ | ];
     cbv [SetOperand Crypto.Util.Option.bind SetRegFull update_reg_with Symbolic.update_reg_with] in *;
     repeat (BreakMatch.break_innermost_match_hyps; Prod.inversion_prod; ErrorT.inversion_ErrorT; subst).
+
+  (* register is 64 bits *)  
+  { repeat step_symex.
+  (* s is a DAG of operations, G is a table of variable values. 'eval_node G s (op [inp1, inp2...]) ?v' is a prop saying that doing operation in state s with table G returns some value v *)
+    { repeat (eauto||econstructor). }
+    (* exists a machine state m' that  *)
+    inversion_ErrorT; Prod.inversion_prod; subst.
+    rewrite Z.shiftr_0_r in *.
+    eexists; split; [exact eq_refl|].
+    destruct s0; cbv [R] in *; intuition try solve [cbn in *; intuition idtac].
+    cbv [R_regs Symbolic.set_reg set_reg index_and_shift_and_bitcount_of_reg].
+    eapply Tuple.fieldwise_to_list_iff.
+    unshelve erewrite 2Tuple.from_list_default_eq, 2Tuple.to_list_from_list;
+      try solve [rewrite ?Crypto.Util.ListUtil.length_set_nth, ?Crypto.Util.ListUtil.length_update_nth, ?Tuple.length_to_list; trivial].
+    eapply Crypto.Util.ListUtil.Forall2_update_nth.
+    { eapply Tuple.fieldwise_to_list_iff; eassumption. } 
+    cbv [R_reg bitmask_of_reg index_and_shift_and_bitcount_of_reg].
+    intros. DestructHead.destruct_head'_and.
+    apply andb_prop in Heqb; destruct Heqb as [Hoffset Hwidest].
+    eapply Ndec.Neqb_complete in Hoffset, Hwidest. rewrite Hoffset.
+    clear Hls0 H2 H5 Hv0. (* COME BACK TO THIS *)
+    (* replace (reg_offset r) with 0%N. the reg offset is 0 because reg size is 64 *)
+    replace (Z.ldiff v2 (Z.ones (Z.of_N (reg_size r)))) with 0. 2: {
+      Search   Print widest_reg_size_of. Print widest_register_of_index_opt. rewrite H6. lia. }
+    (* assert (Hx64: Z.ldiff v2 (Z.ones 64) = 0). {
+      rewrite Z.land_ones in * by Lia.lia.
+      rewrite Z.ldiff_ones_r, Z.shiftl_eq_0_iff, Z.shiftr_div_pow2 by (clear; Lia.lia).
+      clear -H6. cbn in *; zify; Z.div_mod_to_equations; lia. } *)
+    rewrite Z.shiftl_0_r, Z.shiftl_0_r. setoid_rewrite Hx64. setoid_rewrite Z.lor_0_r.
+    intuition idtac; try Option.inversion_option; subst; trivial.
+    { cbn -[Z.ones]; rewrite !Z.land_ones, Zmod_mod by (clear;lia); trivial. } }
+  (* register less than 64 bits  *)
+  { eexists; split; [exact eq_refl|].
+    repeat (step_symex; []).
+    cbv [GetReg64 some_or] in *.
+
+
   { apply andb_prop in Heqb; destruct Heqb as [Hoffset Hwidest]. apply N.eqb_eq in Hoffset, Hwidest.
     eexists; split; [exact eq_refl|].
     repeat (step_symex; []).
