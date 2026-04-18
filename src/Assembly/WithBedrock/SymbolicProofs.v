@@ -990,7 +990,6 @@ Lemma GetOperand_R {opts : symbolic_options_computed_opt} {descr:description} s 
   (H : GetOperand a s = Success (i, s'))
   : R s' m /\ s :< s' /\ exists v, eval s' i v /\ DenoteOperand sa so m a = Some v.
 Proof using Type.
-Locate DenoteOperand.
   cbv [GetOperand DenoteOperand err] in *. break_innermost_match; inversion_ErrorT.
   { eapply GetReg_R in H; intuition eauto. }
   {   
@@ -1035,14 +1034,14 @@ Locate DenoteOperand.
         rewrite H5 at 1; trivial. }  
     }
     (* 128 bit, xmm *)
-    { eapply Load128_R in H; try eassumption; [];
+    { eapply Load128_R in H; try eassumption; try lia; [];
     repeat (subst; destruct_head'_and; destruct_head'_ex).
     repeat (split; eauto; []). rewrite E0 in *. clear H5 H6. rewrite H8 in H4.
     setoid_rewrite H7.
     eexists; split; eauto; f_equal. exact H8. 
       }
     (* 256 bit, ymm *)
-    { eapply Load256_R in H; try eassumption; []; 
+    { eapply Load256_R in H; try eassumption; try lia; []; 
     repeat (subst; destruct_head'_and; destruct_head'_ex).
     repeat (split; eauto; []). rewrite E1 in *. clear H5 H6. rewrite H8 in H4.
     setoid_rewrite H7.
@@ -1051,130 +1050,6 @@ Locate DenoteOperand.
   {step_symex; repeat (eauto||econstructor). }
 Qed.
 
-
-
-
-
-(*
-    eapply Load64_R in HSv; try eassumption; [];
-      repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    { repeat (eauto||econstructor). }
-    split; eauto; [].
-    split; eauto; [].
-    rewrite Z.shiftr_0_r in Hi by lia.
-    case E as [E|E];
-      rewrite E in *; simpl Z.of_N in *.
-    { cbv [get_mem Crypto.Util.Option.bind] in *.
-      destruct_one_match_hyp; Option.inversion_option.
-      epose proof length_load_bytes _ _ _ _ E0.
-      do 1 (destruct l; try solve [inversion H]).
-      eapply @nth_error_load_bytes with (i:=0%nat) in E0; [|clear;lia].
-      symmetry in E0; cbn [nth_error] in E0; simpl Z.of_nat in E0.
-      simpl load_bytes.
-      change (Pos.to_nat 1) with 1%nat.
-      cbv [load_bytes footprint List.map seq List.option_all].
-      setoid_rewrite E0.
-      eexists; split; eauto.
-      cbv [le_combine].
-      rewrite Z.shiftl_0_l, Z.lor_0_r.
-      change (Z.lor (Byte.byte.unsigned b) (Z.shiftl (le_combine l) 8) = x) in H4.
-      rewrite <-H4 in H5 at 2; rewrite H5; clear H4 H5.
-      f_equal.
-      rewrite <-Byte.byte.wrap_unsigned at 1; setoid_rewrite <-Z.land_ones; [|clear;lia].
-      rewrite <-Z.land_assoc.
-      change (Z.land (Z.ones 64) (Z.ones 8)) with (Z.ones 8).
-      rewrite Z.land_lor_distr_l.
-      bitblast.Z.bitblast. subst.
-      rewrite (Z.testbit_neg_r _ (_-8)) by lia; Btauto.btauto. }
-    { setoid_rewrite H4.
-      eexists; split; eauto; f_equal.
-      rewrite H5 at 1; trivial. }
-  (* 128-bit Load case: 2x Load64 + set_slice chain *)
-  { eapply Load64_R in HSlo; try eassumption; [].
-    repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    eapply Load64_R in HShi; try eassumption; [].
-    repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    split; [eauto|].
-    split; [eauto 10|].
-    rewrite E0. simpl N.to_nat.
-    cbv [get_mem Crypto.Util.Option.bind] in *.
-    repeat destruct_one_match_hyp; try congruence.
-    repeat (Option.inversion_option; subst).
-    change (Pos.to_nat 16) with (8 + 8)%nat.
-    match goal with
-    | Elo : load_bytes _ (word.of_Z (DenoteAddress _ _ _)) 8 = Some ?blo,
-      Ehi : load_bytes _ _ 8 = Some ?bhi |- _ =>
-      epose proof length_load_bytes _ _ _ _ Elo as Hlen_lo;
-      epose proof length_load_bytes _ _ _ _ Ehi as Hlen_hi;
-      erewrite load_bytes_app_split; [|exact Elo|];
-      [ | rewrite Hlen_lo; exact Ehi ];
-      eexists; split; [eauto|];
-      f_equal;
-      rewrite le_combine_app, (length_load_bytes _ _ _ _ Elo)
-    end.
-    simpl Z.of_N.
-    bitblast.Z.bitblast; subst; Btauto.btauto. }
-  (* 256-bit Load case: 4x Load64 + set_slice chain *)
-  { eapply Load64_R in HSlo0; try eassumption; [].
-    repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    eapply Load64_R in HSlo1; try eassumption; [].
-    repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    eapply Load64_R in HSlo2; try eassumption; [].
-    repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    eapply Load64_R in HSlo3; try eassumption; [].
-    repeat (subst; destruct_head'_and; destruct_head'_ex).
-    repeat step_symex.
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    1: { repeat (eauto||econstructor). }
-    split; [eauto|].
-    split; [eauto 15|].
-    rewrite E1. simpl N.to_nat.
-    cbv [get_mem Crypto.Util.Option.bind] in *.
-    repeat destruct_one_match_hyp; try congruence.
-    repeat (Option.inversion_option; subst).
-    change (Pos.to_nat 32) with (8 + (8 + (8 + 8)))%nat.
-    match goal with
-    | E0' : load_bytes _ (word.of_Z (DenoteAddress _ _ _)) 8 = Some ?b0,
-      E1' : load_bytes _ _ 8 = Some ?b1,
-      E2' : load_bytes _ _ 8 = Some ?b2,
-      E3' : load_bytes _ _ 8 = Some ?b3 |- _ =>
-      let Hl0 := fresh in epose proof length_load_bytes _ _ _ _ E0' as Hl0;
-      let Hl1 := fresh in epose proof length_load_bytes _ _ _ _ E1' as Hl1;
-      let Hl2 := fresh in epose proof length_load_bytes _ _ _ _ E2' as Hl2;
-      let Hl3 := fresh in epose proof length_load_bytes _ _ _ _ E3' as Hl3;
-      erewrite load_bytes_app_split; [|exact E0'|];
-      [ | rewrite Hl0;
-          erewrite load_bytes_app_split; [reflexivity|exact E1'|];
-          rewrite Hl1;
-          erewrite load_bytes_app_split; [reflexivity|exact E2'|];
-          rewrite Hl2; exact E3' ];
-      eexists; split; [eauto|];
-      f_equal;
-      rewrite !le_combine_app, !app_length, Hl0, Hl1, Hl2, Hl3
-    end.
-    simpl Z.of_N.
-    bitblast.Z.bitblast; subst; Btauto.btauto. } }
-  { step_symex; repeat (eauto||econstructor). }
-Admitted. *)
 
 Ltac step_GetOperand :=
   match goal with
@@ -1193,14 +1068,16 @@ Lemma R_SetOperand {opts : symbolic_options_computed_opt} {descr:description} s 
   v (Hv : eval s i v)
   : exists m', SetOperand sa sz m a v = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
-Admitted.
+
 (* destruct a in *. cbn in H. casework on SetReg - 64 bits or <64 bits *)
-  (* destruct a in *; cbn in H; cbv [err] in *; inversion_ErrorT; [ | ];
+destruct a in *; cbn in H; cbv [err] in *; inversion_ErrorT; [ | ];
     cbv [SetOperand Crypto.Util.Option.bind SetRegFull update_reg_with Symbolic.update_reg_with] in *;
     repeat (BreakMatch.break_innermost_match_hyps; Prod.inversion_prod; ErrorT.inversion_ErrorT; subst).
-  { eexists; split; [exact eq_refl|].
+  { apply andb_prop in Heqb; destruct Heqb as [Hoffset Hwidest]. apply N.eqb_eq in Hoffset, Hwidest.
+    eexists; split; [exact eq_refl|].
     repeat (step_symex; []).
-    cbv [GetRegFull some_or] in *.
+    cbv [Symbolic.set_reg] in *.
+    Check get_reg_R.
     pose proof (get_reg_R s _ ltac:(eassumption) (reg_index r)) as Hr.
     destruct (Symbolic.get_reg _ _) in *; cbn [ErrorT.bind] in H;
       ErrorT.inversion_ErrorT; Prod.inversion_prod; subst;cbn [fst snd] in *.
@@ -1250,7 +1127,7 @@ Admitted.
     { eapply Store64_R with (v':=v) in H;
         try eassumption; eauto with nocore; try solve [rewrite H5; bitblast.Z.bitblast].
       destruct_head'_ex; destruct_head'_and. setoid_rewrite H. eauto 9. } }
-Qed. *)
+Qed.
 
 Ltac step_SetOperand :=
   match goal with
