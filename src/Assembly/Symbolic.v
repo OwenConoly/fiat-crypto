@@ -4678,25 +4678,24 @@ Definition rcrcnt s cnt : Z :=
 Module SymbolicVector.
 (* === Vector instruction === *)
 Definition extract_lane {opts : symbolic_options_computed_opt} {descr : description}
-  (v : idx) (lane_idx : nat) (lane_width : Z) : M idx :=
-  let offset := Z.of_nat lane_idx * lane_width in
-  App (slice (Z.to_N offset) (Z.to_N lane_width), [v]).
+  (v : idx) (lane_idx : nat) (lane_width : N) : M idx :=
+  let offset := (N.of_nat lane_idx * lane_width)%N in
+  App (slice offset lane_width, [v]).
 
 Definition make_lane {opts : symbolic_options_computed_opt} {descr : description}
-  (v1 v2 : idx) (lane_op : op) (lane_idx : nat) (lane_width : Z) : M idx :=
-  let offset := Z.of_nat lane_idx * lane_width in
+  (v1 v2 : idx) (lane_op : op) (lane_idx : nat) (lane_width : N) : M idx :=
   l1 <- extract_lane v1 lane_idx lane_width;
   l2 <- extract_lane v2 lane_idx lane_width;
   App (lane_op, [l1; l2]).
 
 Definition insert_lane {opts : symbolic_options_computed_opt} {descr : description}
-  (acc lane_val : idx) (lane_idx : nat) (lane_width : Z) : M idx :=
-  let offset := Z.of_nat lane_idx * lane_width in
-  App (set_slice (Z.to_N offset) (Z.to_N lane_width), [acc; lane_val]).
+  (acc lane_val : idx) (lane_idx : nat) (lane_width : N) : M idx :=
+  let offset := (N.of_nat lane_idx * lane_width)%N in
+  App (set_slice offset lane_width, [acc; lane_val]).
 
 Fixpoint vector_binop_aux {opts : symbolic_options_computed_opt} {descr : description}
   (v1 v2 : idx) (lane_op : op) (lane_idx : nat) (num_remaining : nat)
-  (lane_width : Z) (acc : idx) : M idx :=
+  (lane_width : N) (acc : idx) : M idx :=
   match num_remaining with
   | O => ret acc
   | S n =>
@@ -4708,8 +4707,8 @@ Fixpoint vector_binop_aux {opts : symbolic_options_computed_opt} {descr : descri
 (* decompose into per-lane scalar ops. *)
 Definition SymexVectorBinOp {opts : symbolic_options_computed_opt} {descr : description}
   {s : OperationSize} {sa : AddressSize}
-  (dst src1 src2 : ARG) (lane_op : op) (lane_width : Z) : M unit :=
-  let num_lanes := N.to_nat (s / Z.to_N lane_width)%N in
+  (dst src1 src2 : ARG) (lane_op : op) (lane_width : N) : M unit :=
+  let num_lanes := N.to_nat (s / lane_width)%N in
   v1 <- GetOperand src1;
   v2 <- GetOperand src2;
   acc <- App (const 0, []);
@@ -5125,13 +5124,13 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
 
   | nop, [] => ret tt
   | vzeroupper, [] =>
-    let ymm_regs := [ymm0; ymm1; ymm2; ymm3; ymm4; ymm5; ymm6; ymm7;
+    (* let ymm_regs := [ymm0; ymm1; ymm2; ymm3; ymm4; ymm5; ymm6; ymm7;
                       ymm8; ymm9; ymm10; ymm11; ymm12; ymm13; ymm14; ymm15] in
     mapM_ (fun yr =>
       v <- GetReg (VReg yr);
       lo <- App ((slice 0 128), [v]);
       SetReg (VReg yr) lo
-    ) ymm_regs
+    ) ymm_regs *)
   | _, _ => err (error.unimplemented_instruction instr)
  end
   | Some prefix => err (error.unimplemented_prefix instr) end
