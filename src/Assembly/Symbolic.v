@@ -4432,37 +4432,37 @@ Section MapM. (* map over a list in the state monad *)
 End MapM.
 Definition mapM_ {A B} (f: A -> M B) l : M unit := _ <- mapM f l; ret tt.
 
-Definition error_get_reg_of_reg_index ri : symbolic_state -> error
-  := error.get_reg (let r := widest_register_of_index ri in
-                    if (reg_index r =? ri)%N
-                    then inr r
-                    else inl ri).
 
 Definition GetFlag f : M idx :=
-  some_or (fun s => get_flag s f) (error.get_flag f).
+some_or (fun s => get_flag s f) (error.get_flag f).
+Definition SetFlag f i : M unit :=
+fun s => Success (tt, update_flag_with s (fun s => set_flag s f i)).
+Definition HavocFlags : M unit :=
+fun s => Success (tt, update_flag_with s (fun _ => Tuple.repeat None 6)).
+Definition PreserveFlag {T} (f : FLAG) (k : M T) : M T :=
+vf <- (fun s => Success (get_flag s f, s));
+x <- k;
+_ <- (fun s => Success (tt, update_flag_with s (fun s => set_flag_internal s f vf)));
+ret x.
+
+Definition error_get_reg_of_reg_index ri : symbolic_state -> error
+:= error.get_reg (let r := widest_register_of_index ri in
+                  if (reg_index r =? ri)%N
+                  then inr r
+                  else inl ri).
 Definition GetRegFull ri : M idx :=
-  some_or (fun st => get_reg st ri) (error_get_reg_of_reg_index ri).
+some_or (fun st => get_reg st ri) (error_get_reg_of_reg_index ri).
+Definition SetRegFull rn i : M unit :=
+fun s => Success (tt, update_reg_with s (fun s => set_reg s rn i)).
+Definition Remove64 (a : idx) : M idx
+:= fun s => let '(vs, m) := remove a s in
+match vs with
+| [] => Error (error.remove a s, s)
+| [v] => Success (v, update_mem_with s (fun _ => m))
+| vs => Error (error.remove_has_duplicates a vs s, s)
+end.
 Definition Load64 (a : idx) : M idx := 
   some_or (load a) (error.load a).
-Definition Remove64 (a : idx) : M idx
-  := fun s => let '(vs, m) := remove a s in
-              match vs with
-              | [] => Error (error.remove a s, s)
-              | [v] => Success (v, update_mem_with s (fun _ => m))
-              | vs => Error (error.remove_has_duplicates a vs s, s)
-              end.
-Definition SetFlag f i : M unit :=
-  fun s => Success (tt, update_flag_with s (fun s => set_flag s f i)).
-Definition HavocFlags : M unit :=
-  fun s => Success (tt, update_flag_with s (fun _ => Tuple.repeat None 6)).
-Definition PreserveFlag {T} (f : FLAG) (k : M T) : M T :=
-  vf <- (fun s => Success (get_flag s f, s));
-  x <- k;
-  _ <- (fun s => Success (tt, update_flag_with s (fun s => set_flag_internal s f vf)));
-  ret x.
-
-Definition SetRegFull rn i : M unit :=
-  fun s => Success (tt, update_reg_with s (fun s => set_reg s rn i)).
 Definition Store64 (a v : idx) : M unit :=
   ms <- some_or (store a v) (error.store a v);
   fun s => Success (tt, update_mem_with s (fun _ => ms)).
@@ -4485,16 +4485,32 @@ Definition GetReg {opts : symbolic_options_computed_opt} {descr:description} r :
   let '(rn, lo, sz) := index_and_shift_and_bitcount_of_reg r in
   v <- GetRegFull rn;
   App ((slice lo sz), [v]).
-Definition SetReg {opts : symbolic_options_computed_opt} {descr:description} 
+  
+(* Overwrite the entire underlying register slot. Use when r is the widest
+   register in its hierarchy (offset 0, size = widest); the old value is
+   discarded. *)
+Definition SetRegOverwrite {opts : symbolic_options_computed_opt} {descr:description}
+  r (v : idx) : M unit :=
+  let '(rn, _, sz) := index_and_shift_and_bitcount_of_reg r in
+  v <- App (slice 0 sz, [v]);
+  SetRegFull rn v.
+
+(* Write into a sub-window of the underlying register slot, preserving bits
+   outside the window. Use when r is narrower than the widest register in
+   its hierarchy. *)
+Definition SetRegSlice {opts : symbolic_options_computed_opt} {descr:description}
   r (v : idx) : M unit :=
   let '(rn, lo, sz) := index_and_shift_and_bitcount_of_reg r in
-  (* check size against widest register in heirarchy *)
+  old <- GetRegFull rn;
+  v <- App (set_slice lo sz, [old; v]);
+  SetRegFull rn v.
+
+Definition SetReg {opts : symbolic_options_computed_opt} {descr:description}
+  r (v : idx) : M unit :=
+  let '(_, lo, sz) := index_and_shift_and_bitcount_of_reg r in
   if (N.eqb lo 0) && (N.eqb sz (widest_reg_size_of r))
-  then v <- App (slice 0 sz, [v]);
-       SetRegFull rn v (* works if old value is unspecified *)
-  else old <- GetRegFull rn;
-       v <- App ((set_slice lo sz), [old; v]);
-       SetRegFull rn v.
+  then SetRegOverwrite r v
+  else SetRegSlice r v.
 
 Class AddressSize := address_size : OperationSize.
 Definition Address {opts : symbolic_options_computed_opt} {descr:description} {sa : AddressSize} (a : MEM) : M idx :=
@@ -4571,7 +4587,6 @@ Definition Load {opts : symbolic_options_computed_opt} {descr:description}
   else if (sz =? 256)%N then
     Load256_of_idx addr
   else err (error.unsupported_memory_access_size sz).
-
 
 (* Currently unused. Commented out until a caller needs it; at that point,
    refactor to mirror Load_of_idx / Store_of_idx. *)
@@ -5124,13 +5139,13 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
 
   | nop, [] => ret tt
   | vzeroupper, [] =>
-    (* let ymm_regs := [ymm0; ymm1; ymm2; ymm3; ymm4; ymm5; ymm6; ymm7;
+    let ymm_regs := [ymm0; ymm1; ymm2; ymm3; ymm4; ymm5; ymm6; ymm7;
                       ymm8; ymm9; ymm10; ymm11; ymm12; ymm13; ymm14; ymm15] in
     mapM_ (fun yr =>
       v <- GetReg (VReg yr);
       lo <- App ((slice 0 128), [v]);
       SetReg (VReg yr) lo
-    ) ymm_regs *)
+    ) ymm_regs
   | _, _ => err (error.unimplemented_instruction instr)
  end
   | Some prefix => err (error.unimplemented_prefix instr) end
