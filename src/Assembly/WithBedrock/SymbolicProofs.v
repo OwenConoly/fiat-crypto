@@ -526,8 +526,9 @@ Ltac step_SetFlag :=
     [eassumption|..|clear H]
   end.
 
-
-Section GetSetProofs.
+(* ----------------------------------------------*)
+(* GETTING OPERATIONS *)
+(* ----------------------------------------------*)
 
 Lemma GetRegFull_R s m (HR : R s m) rn i s'
   (H : GetRegFull rn s = Success (i, s'))
@@ -1021,6 +1022,10 @@ Ltac step_GetOperand :=
     case (GetOperand_R s _ ltac:(eassumption) _ _ ltac:(reflexivity) _ _ _ H) as (Hs'&Hl&(v&Hi&Hv)); clear H
   end.
 
+(* ----------------------------------------------*)
+(* SETTING OPERATIONS *)
+(* ----------------------------------------------*)
+
 Lemma interp_op_set_slice lo sz a b :
   interp_op (set_slice lo sz) [a; b] = Some (bits_set_slice a b lo sz).
 Proof. reflexivity. Qed.
@@ -1171,65 +1176,6 @@ Proof using Type.
   setoid_rewrite (split_le_combine [b1; b2; b3; b4; b5; b6; b7]); trivial.
 Qed.
 
-Import Crypto.Util.ListUtil.
-Lemma combine_update_nth {A B} n (f : A -> A) (g : B -> B) xs ys :
-  length xs = length ys ->
-  combine (update_nth n f xs) (update_nth n g ys) = update_nth n (fun '(a, b) => (f a, g b)) (combine xs ys).
-Proof.
-  revert n ys; induction xs as [|x xs IH]; destruct ys as [|y ys]; cbn; intros;
-    try lia; destruct n; cbn; try reflexivity.
-  - f_equal. apply IH. lia.
-Qed.
-
-Lemma Forall2_update_nth_r {A B} (R : A -> B -> Prop) n f xs ys :                                                  
-  Forall2 R xs ys ->                                                                                               
-  (forall x y, nth_error xs n = Some x -> nth_error ys n = Some y -> R x y -> R x (f y)) ->                        
-  Forall2 R xs (update_nth n f ys).         
-Proof.                                                                                                             
-  intro H; revert n; induction H; intros [|n]; cbn.
-  - constructor.                                                                                                   
-  - constructor; auto.
-  - constructor; [eapply H1; eauto; reflexivity | auto].                                                           
-  - constructor; [auto | apply IHForall2; intros; eapply H1; eauto].
-Qed.
-
-Lemma widest_reg_size_at_index r wr :
-  nth_error widest_registers (N.to_nat (reg_index r)) = Some wr ->
-  reg_size wr = widest_reg_size_of r.
-Proof.
-Admitted.
-  (* rewrite nth_error_map in Hw.                                                                                       
-    destruct (nth_error widest_registers (N.to_nat (reg_index r))) as [wr|] eqn:Hwr;                                   
-      [cbn in Hw; inversion Hw; subst x_old | discriminate Hw].                                                        
-    (* show widest_reg_size_of r = reg_size wr *)                                                                      
-    assert (Hwidth : widest_reg_size_of r = reg_size wr).                                                              
-    { unfold widest_reg_size_of, widest_register_of_index, widest_register_of_index_opt.                               
-      replace (List.map ( @snd _ _) wide_reg_index_pairs) with widest_registers by reflexivity.  (* both are Eval lazy, should reduce *)                                                       
-      rewrite Hwr. reflexivity. }               
-    (* Z.ldiff conc_old ... = 0 because conc_old fits in width bits *)                                                 
-    assert (Hldiff : Z.ldiff conc_old (Z.ones (Z.of_N (widest_reg_size_of r))) = 0).
-    { rewrite Hwidth, Hbits_old. bitblast.Z.bitblast. }                                                                         
-    rewrite Hldiff, Z.lor_0_r.              
-    split.                                                                                                             
-    - intros i0 Hi0; inversion Hi0; subst. exact Hv0.                                                                  
-    - bitblast.Z.bitblast. *)
-
-Lemma R_regs_set_full d sr mr (HR : R_regs d sr mr) r (i : idx) v
-  (Hv : eval d i v)
-  (Hbound : v = Z.land v (Z.ones (Z.of_N (widest_reg_size_of r))))
-  : R_regs d (Symbolic.set_reg sr (reg_index r) i)
-  (Tuple.from_list_default 0%Z _
-  (ListUtil.update_nth (N.to_nat (reg_index r))
-  (fun _ => v)
-  (Tuple.to_list _ mr))).
-Admitted.
-  
-Lemma R_regs_set d sr mr (HR : R_regs d sr mr) r (i: idx) v
-  (Hv : eval d i (Z.land v (Z.ones (Z.of_N (widest_reg_size_of r)))))
-  : R_regs d (Symbolic.set_reg sr (reg_index r) i)
-              (Semantics.set_reg mr r v).
-Proof. Admitted.
-
 Lemma subsumed_update_reg_with (s : symbolic_state) f
   : s :< Symbolic.update_reg_with s f.
 Proof using Type. 
@@ -1245,6 +1191,27 @@ Lemma subsumed_update_mem_with (s : symbolic_state) f
 Proof using Type. 
   destruct s; cbv [Symbolic.update_mem_with]; cbn; exact (fun _ _ H => H). Qed.
 
+Import Crypto.Util.ListUtil.
+Lemma combine_update_nth {A B} n (f : A -> A) (g : B -> B) xs ys :
+  length xs = length ys ->
+  combine (update_nth n f xs) (update_nth n g ys) = update_nth n (fun '(a, b) => (f a, g b)) (combine xs ys).
+Proof.
+  revert n ys; induction xs as [|x xs IH]; destruct ys as [|y ys]; cbn; intros;
+    try lia; destruct n; cbn; try reflexivity.
+  - f_equal. apply IH. lia.
+Qed.
+
+Lemma Forall2_update_nth_r {A B} (R : A -> B -> Prop) n f xs ys :                                                  
+  Forall2 R xs ys ->                                                                                               
+  (forall x y, nth_error xs n = Some x -> nth_error ys n = Some y -> R x y -> R x (f y)) ->                        
+  Forall2 R xs (update_nth n f ys).         
+Proof.
+  intro H; revert n; induction H; intros [|n]; cbn.
+  - constructor.
+  - constructor; auto.
+  - constructor; [eapply H1; eauto; reflexivity | auto].
+  - constructor; [auto | apply IHForall2; intros; eapply H1; eauto].
+Qed.
 
 Lemma reg_index_lt r : (N.to_nat (reg_index r) < length widest_registers)%nat.
 Proof. destruct r as [sr | vr]; [destruct sr | destruct vr]; vm_compute; lia. Qed.
@@ -1285,6 +1252,48 @@ Proof using Type.
     rewrite Hw. exact Hb.
 Qed.
 
+(* Lemma widest_reg_size_at_index r wr :
+  nth_error widest_registers (N.to_nat (reg_index r)) = Some wr ->
+  reg_size wr = widest_reg_size_of r.
+Proof.
+Admitted. *)
+ 
+(* works because Symbolic.set_reg just overwrites the reg slot. so the fun _ => v can replace bits_set_slice logic *)
+Lemma R_regs_set_reg d sr mr (HR : R_regs d sr mr) r (i : idx) v
+  (Hv : eval d i v)
+  (Hbound : v = Z.land v (Z.ones (Z.of_N (widest_reg_size_of r))))
+  : R_regs d (Symbolic.set_reg sr (reg_index r) i)
+  (Tuple.from_list_default 0%Z _
+  (ListUtil.update_nth (N.to_nat (reg_index r))
+  (fun _ => v)
+  (Tuple.to_list _ mr))).
+Proof. 
+  unfold R_regs, Symbolic.set_reg.
+  (* both sides become to_list ∘ update_nth — strip the tuple/list-default wrappers *)
+  unshelve erewrite 2 Tuple.from_list_default_eq, 2 Tuple.to_list_from_list;
+    try solve [rewrite ?ListUtil.length_set_nth, ?ListUtil.length_update_nth,
+                       ?Tuple.length_to_list; trivial].
+  unfold ListUtil.set_nth.
+  rewrite combine_update_nth by (rewrite !Tuple.length_to_list; reflexivity).
+  eapply Forall2_update_nth_r; [exact HR|].
+  intros x_old [sym_old conc_old] Hw _ HR_old.
+  (* extract width witness from the widths-list lookup *)
+  rewrite nth_error_map in Hw.
+  destruct (nth_error widest_registers (N.to_nat (reg_index r))) as [wr|] eqn:Hwr;
+    [cbn in Hw; inversion Hw; subst x_old | discriminate Hw].
+  (* widest_reg_size_of r = reg_size wr — same trick as in R_SetReg_full *)
+  assert (Hwidth : widest_reg_size_of r = reg_size wr).
+  { unfold widest_reg_size_of, widest_register_of_index, widest_register_of_index_opt.
+    replace (List.map ( @snd _ _) wide_reg_index_pairs) with widest_registers by reflexivity.
+    rewrite Hwr; reflexivity. }
+  rewrite <- Hwidth.
+  (* R_reg: split eval part from bitwidth part *)
+  split.
+  - intros i0 Hi0; inversion Hi0; subst; exact Hv.
+  - exact Hbound.
+Qed.
+
+(* bits_set_slice commutes with Z.land Z.ones *)
 Lemma bits_set_slice_bound (base v : Z) (shift sz W : N) :
   (sz + shift <= W)%N ->
   base = Z.land base (Z.ones (Z.of_N W)) ->
@@ -1298,7 +1307,19 @@ Proof using Type.
   Btauto.btauto.
 Qed.
 
-Lemma R_SetRegFull_via_splice {opts : symbolic_options_computed_opt} {descr : description}
+(* bits_set_slice just clips v when v is widest with no offset *)
+Lemma bits_set_slice_widest (base v : Z) (shift sz W : N) :
+    shift = 0%N ->
+    sz = W ->
+    base = Z.land base (Z.ones (Z.of_N W)) ->
+    bits_set_slice base v shift sz = Z.land v (Z.ones (Z.of_N W)).
+Proof. 
+  intros. cbv [bits_set_slice]. subst. repeat rewrite Z.shiftl_0_r. 
+  rewrite H1. bitblast.Z.bitblast.
+Qed.
+
+(* used by R_SetRegSlice *)
+Lemma R_set_reg_via_splice {opts : symbolic_options_computed_opt} {descr : description}
   s m (HR : R s m) r (i : idx) v
   (Hi : eval s i (bits_set_slice (Tuple.nth_default 0 (N.to_nat (reg_index r)) (m : reg_state)) v
                                   (reg_offset r) (reg_size r)))
@@ -1309,13 +1330,6 @@ Proof using Type.
   destruct HR as (Hok & Hregs & Hflags & Hmem).
   cbv [R Symbolic.update_reg_with update_reg_with]; cbn in *.
   ssplit; eauto.
-  (* Reduces to: R_regs d (Symbolic.set_reg sr (reg_index r) i) (set_reg mr r v) *)
-
-  (* Step 1: rewrite [set_reg mr r v] into the slot-replacement form
-     [from_list_default ... (update_nth ... (fun _ => bits_set_slice ...) ...)]
-     using [update_nth_ext]: the body [fun curv => bits_set_slice curv v shift sz]
-     equals [fun _ => bits_set_slice (nth_default 0 (reg_index r) mr) v ...]
-     at the unique updated position. *)
   unfold set_reg, index_and_shift_and_bitcount_of_reg.
   erewrite ListUtil.update_nth_ext with
     (g := fun _ => bits_set_slice (Tuple.nth_default 0 (N.to_nat (reg_index r)) mr) v
@@ -1325,14 +1339,28 @@ Proof using Type.
        rewrite <- Tuple.nth_default_to_list.
        cbv [nth_default]. rewrite Hcurv. reflexivity. }
 
-  (* Step 2: apply R_regs_set_full. *)
-  eapply R_regs_set_full; [exact Hregs | exact Hi |].
+  eapply R_regs_set_reg; [exact Hregs | exact Hi |].
 
-  (* Step 3: boundedness of bits_set_slice by ones (widest_reg_size_of r).
-     Uses reg_size_offset_bounded and the R_reg bound on the old slot. *)
   pose proof (reg_size_offset_bounded r) as Hbnd.
   pose proof (R_regs_old_bound _ _ _ Hregs r) as Hold_bnd.
   apply bits_set_slice_bound; [exact Hbnd | exact Hold_bnd]. 
+Qed.
+  
+Lemma R_set_reg_overwrite {opts : symbolic_options_computed_opt} {descr : description}
+    s m (HR : R s m) r (i : idx) v
+    (Hoffset : reg_offset r = 0%N)
+    (Hwidest : reg_size r = widest_reg_size_of r)
+    (Hi : eval s i (Z.land v (Z.ones (Z.of_N (reg_size r)))))
+    : R (Symbolic.update_reg_with s (fun sr => Symbolic.set_reg sr (reg_index r) i))
+        (update_reg_with m (fun mr => set_reg mr r v)).
+Proof.
+  apply R_set_reg_via_splice with (v := v); [exact HR |].
+  rewrite Hoffset, Hwidest.
+  erewrite bits_set_slice_widest; eauto.
+  destruct s as [d sr sf sm]. 
+  destruct m as [mr mf mm]. 
+  rewrite (R_regs_old_bound d sr mr). rewrite Hwidest. bitblast.Z.bitblast.
+  unfold R in HR. destruct HR as (_ & HR & _). assumption. 
 Qed.
 
 (* Overwrite case: r is the widest register in its hierarchy. *)
@@ -1349,29 +1377,11 @@ Proof using Type.
   step_symex. rename v0 into i0. step_App; repeat (econstructor; eauto); cbv [fst snd] in *;
   rewrite Z.shiftr_0_r in Hi0;
   cbv [SetRegFull] in H; inversion_ErrorT; Prod.inversion_prod.
-  {
-    subst. 
-    cbv [Symbolic.update_reg_with update_reg_with].
-    cbv [R] in *; split; [| split; [ |split]]; eauto;
-    destruct s0 as [d0 sr0 sf0 sm0]; destruct Hs0 as (Hok0 & Hregs0 & Hflags0 & Hmem0).
-    - eapply R_regs_set; [exact Hregs0 | rewrite <- Hwidest; exact Hi0].
-    - exact Hflags0.
-    - exact Hmem0.
-  }
-  {
-    eapply (subsumed_trans s s0 s'). 
+  { subst. apply R_set_reg_overwrite; eauto. }
+  { eapply (subsumed_trans s s0 s'). 
     -exact Hls0.
-    -rewrite <- H1; apply subsumed_update_reg_with.
-   }
+    -rewrite <- H1; apply subsumed_update_reg_with. }
 Qed.
-
-Lemma R_SetRegFull_via_splice {opts : symbolic_options_computed_opt} {descr : description}
-  s m (HR : R s m) r (i : idx) v
-  (Hi : eval s i (bits_set_slice (Tuple.nth_default 0 (N.to_nat (reg_index r)) (m : reg_state)) v
-                                  (reg_offset r) (reg_size r)))
-  : R (Symbolic.update_reg_with s (fun sr => Symbolic.set_reg sr (reg_index r) i))
-      (update_reg_with m (fun mr => set_reg mr r v)).
-Proof. Admitted.
 
 (* Slice case: r is narrower than the widest register in its hierarchy.
    No precondition on offset/size: SetRegSlice always works correctly. *)
@@ -1389,7 +1399,7 @@ Proof using Type.
   cbv [SetRegFull] in H; inversion_ErrorT; Prod.inversion_prod; eauto.
   {
     subst. destruct HSv0 as (HR1 & Hsubs1 & Heval1).
-    apply R_SetRegFull_via_splice; eauto.
+    apply R_set_reg_via_splice; eauto.
   }
   {
     destruct HSv0 as (HR1 & Hsubs1 & Heval1).
@@ -1771,8 +1781,6 @@ Ltac step_SetOperand :=
       case (R_SetOperand s _ ltac:(eassumption) _ _ _ _ _ _ H _ ltac:(eauto 99 with nocore))
         as (m&?Hm&HR&Hl); clear H
   end.
-
-End GetSetProofs.
 
 
 (* === Correspondence lemmas for SymbolicVector general helpers. ===

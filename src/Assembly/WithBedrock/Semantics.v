@@ -66,9 +66,9 @@ Definition get_reg (st : reg_state) (r : REG) : Z
 (* Splice [v]'s low [bitcount] bits into [curv] at bit position [shift],
   leaving other bits of [curv] untouched. Used by both [set_reg] and the
   symbolic [set_slice] op so that proofs can match shapes. *)
-Definition bits_set_slice (curv v : Z) (shift bitcount : N) : Z :=
-  Z.lor (Z.shiftl (Z.land v (Z.ones (Z.of_N bitcount))) (Z.of_N shift))
-        (Z.ldiff curv (Z.shiftl (Z.ones (Z.of_N bitcount)) (Z.of_N shift))).
+Definition bits_set_slice (curv v : Z) (shift bitcount : N) : Z := let v_low := (Z.shiftl (Z.land v (Z.ones (Z.of_N bitcount))) (Z.of_N shift)) in 
+let mask := (Z.shiftl (Z.ones (Z.of_N bitcount)) (Z.of_N shift)) in
+  Z.lor v_low (Z.ldiff curv mask).
 
 (* implicitly zeros the higher bits when v is smaller than bitcount.? *)
 Definition set_reg (st : reg_state) (r : REG) (v : Z) : reg_state
