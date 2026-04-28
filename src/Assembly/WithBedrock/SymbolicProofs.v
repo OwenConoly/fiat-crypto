@@ -1448,72 +1448,6 @@ Proof.
   intros. subst. unfold DenoteAddress. apply H.
 Qed.
 
-(* ============================================================ *)
-(* LEVEL 0: byte-level store composition lemmas                 *)
-(* ============================================================ *)
-
-Lemma le_split_app n1 n2 v :
-  le_split (n1 + n2) v = le_split n1 v ++ le_split n2 (Z.shiftr v (8 * Z.of_nat n1)).
-Admitted.
-(* PROOF: induction on n1.
-   base: le_split 0 v = [], shiftr by 0, app_nil_l.
-   step: unfold le_split at LHS, cons of_Z, f_equal,
-         rewrite IH, shiftr_shiftr, replace (8+8*n1) with (8*S n1). *)
-
-Lemma store_bytes_app (m: mem_state) a bs1 bs2 m1 m2 :
-  store_bytes m a bs1 = Some m1 ->
-  store_bytes m1 (word.add a (word.of_Z (Z.of_nat (length bs1)))) bs2 = Some m2 ->
-  store_bytes m a (bs1 ++ bs2) = Some m2.
-Admitted.
-(* PROOF: unfold store_bytes in *.
-   The load_bytes guard for (bs1++bs2) holds because:
-     - load_bytes m a (length bs1) succeeds (from H1's guard),
-     - load_bytes m1 (a+len bs1) (length bs2) succeeds (from H2's guard),
-     - unchecked_store_bytes only adds mappings, so the second guard
-       still holds on m1.
-   Then unchecked_store_bytes m a (bs1++bs2) =
-     map.putmany m (map.of_list_word_at a (bs1++bs2)).
-   Split of_list_word_at over (++), reassociate putmany,
-   match the two-step store. *)
-
-Lemma le_split_mod n v :
-  le_split n (v mod 2 ^ (8 * Z.of_nat n)) = le_split n v.
-Admitted.
-(* PROOF: induction on n; each byte is (v mod 256), and
-   (v mod 2^(8k)) mod 256 = v mod 256 when k >= 1.
-   Step uses shiftr_mod_mod identity. *)
-
-(* ============================================================ *)
-(* LEVEL 1: SetMem composition                                  *)
-(* ============================================================ *)
-
-(* Writing lower n1 bytes, then upper n2 bytes, equals writing all (n1+n2) bytes. *)
-Lemma SetMem_compose m addr n1 n2 v m1 m2 :
-  SetMem m addr n1 (Z.land v (Z.ones (8 * Z.of_nat n1))) = Some m1 ->
-  SetMem m1 (addr + Z.of_nat n1) n2 (Z.shiftr v (8 * Z.of_nat n1)) = Some m2 ->
-  SetMem m addr (n1 + n2) v = Some m2.
-Proof.
-  cbv [SetMem set_mem Crypto.Util.Option.bind].
-  intros H1 H2.
-  destruct (store_bytes _ _ (le_split n1 _)) eqn:Hs1 in H1; [| discriminate].
-  inversion H1; subst m1; clear H1.
-  destruct (store_bytes _ _ (le_split n2 _)) eqn:Hs2 in H2; [| discriminate].
-  inversion H2; subst m2; clear H2.
-  rewrite le_split_app.
-  rewrite Z.land_ones in Hs1 by lia.
-  erewrite store_bytes_app.
-  - reflexivity.
-  - rewrite le_split_mod in Hs1. exact Hs1.
-  - rewrite length_le_split. rewrite <- word.ring_morph_add. exact Hs2.
-Qed.
-
-Lemma SetMem_0 m addr v : SetMem m addr 0 v = Some m.
-Admitted.
-(* PROOF: cbv [SetMem set_mem store_bytes Crypto.Util.Option.bind].
-   le_split 0 v = []. footprint _ 0 = []. option_all [] = Some [].
-   unchecked_store_bytes m a [] = map.putmany m map.empty = m.
-   update_mem_with with identity. *)
-
 Lemma byte_wrap_bounds w n
 	(H : Z.of_nat n > 0) :
 	Byte.byte.wrap (w mod 2^ (8 * Z.of_nat n)) = Byte.byte.wrap w.
@@ -1563,9 +1497,120 @@ Proof.
 			 unfold set_mem in *; rewrite le_split_bounds; rewrite H; reflexivity. 
 Qed.
 
+Lemma le_split_app n1 n2 v :
+  le_split (n1 + n2) v = le_split n1 v ++ le_split n2 (Z.shiftr v (8 * Z.of_nat n1)).
+Proof. 
+			 revert n2 n1 v. induction n1.
+			 { intros. simpl. rewrite Z.shiftr_0_r. reflexivity. }
+			 { intros. 
+			 change (le_split (S n1 + n2) ?x) with (Byte.byte.of_Z x :: le_split (n1 + n2) (Z.shiftr x 8)).
+			 change (le_split (S n1) ?x) with (Byte.byte.of_Z x :: le_split n1 (Z.shiftr x 8)).
+			 rewrite IHn1. 
+			 replace (Z.shiftr (Z.shiftr v 8) (8 * Z.of_nat n1)) with (Z.shiftr v (8 * Z.of_nat (S n1))). reflexivity.
+			 bitblast.Z.bitblast. }
+Qed.
+
+Lemma load_bytes_unchecked_store_bytes_covered (m : mem_state) (a : word64) bs (a2 : word64) n2 r1 r2 :
+  load_bytes m a (length bs) = Some r1 ->
+  load_bytes (unchecked_store_bytes m a bs) a2 n2 = Some r2 ->
+  exists r, load_bytes m a2 n2 = Some r.
+Proof.
+  intros H1 H2.
+  apply Memory.load_bytes_all.
+  intros i Hi.
+  (* From H2: address (a2 + i) is accessible in m1 *)
+  pose proof (Memory.nth_error_load_bytes _ _ _ _ H2 i Hi) as Hm1.
+  (* nth_error r2 i is Some something *)
+  destruct (List.nth_error r2 i) as [b|] eqn:Er2.
+  2: { apply List.nth_error_None in Er2.
+       erewrite Memory.length_load_bytes in Er2 by exact H2. lia. }
+  symmetry in Hm1.
+  (* Hm1 : map.get m1 (a2+i) = Some b *)
+  cbv [unchecked_store_bytes] in Hm1.
+  rewrite Properties.map.get_putmany_dec in Hm1.
+  destruct (map.get (map.of_list_word_at a bs) (word.add a2 (word.of_Z (Z.of_nat i))))
+    as [b'|] eqn:Eov.
+  - (* In the overlay: addr is in footprint a (length bs); use H1 *)
+    rewrite OfListWord.map.get_of_list_word_at in Eov.
+    apply List.nth_error_Some_bound_index in Eov.
+    set (j := Z.to_nat (word.unsigned (word.sub (word.add a2 (word.of_Z (Z.of_nat i))) a))) in *.
+    pose proof (Memory.nth_error_load_bytes _ _ _ _ H1 j Eov) as Hm.
+    (* Hm : nth_error r1 j = map.get m (a + j) *)
+    (* Need: a + j = a2 + i  (in word arithmetic) *)
+    assert (Haddr : word.add a (word.of_Z (Z.of_nat j)) =
+                    word.add a2 (word.of_Z (Z.of_nat i))).
+    { subst j. rewrite Z2Nat.id by apply word.unsigned_range.
+      rewrite word.of_Z_unsigned. ring. }
+    rewrite Haddr in Hm.
+    destruct (List.nth_error r1 j) eqn:Er1.
+    + eauto.
+    + apply List.nth_error_None in Er1.
+      erewrite Memory.length_load_bytes in Er1 by exact H1. lia.
+  - (* Not in overlay: map.get m1 = map.get m *)
+    eauto.
+Qed.
+
+
+Lemma store_bytes_app (m: mem_state) a bs1 bs2 m1 m2 :
+    (Z.of_nat (length bs1) + Z.of_nat (length bs2) <= 2^64)%Z ->
+    store_bytes m a bs1 = Some m1 ->
+    store_bytes m1 (word.add a (word.of_Z (Z.of_nat (length bs1)))) bs2 = Some m2 ->
+    store_bytes m a (bs1 ++ bs2) = Some m2.
+  Proof.
+    intros Hlen H1 H2.
+    cbv [store_bytes] in *.
+    destruct (load_bytes m a (length bs1)) as [r1|] eqn:E1; [|discriminate].
+    set (m1' := unchecked_store_bytes m a bs1) in *.
+    assert (Hm1 : m1' = m1) by
+      exact (f_equal (fun x => match x with Some y => y | None => m end) H1).
+    subst m1.
+    destruct (load_bytes m1' _ (length bs2)) as [r2|] eqn:E2; [|discriminate].
+    set (m2' := unchecked_store_bytes m1' _ bs2) in *.
+    assert (Hm2 : m2' = m2) by
+      exact (f_equal (fun x => match x with Some y => y | None => m1' end) H2).
+    subst m2.
+    rewrite app_length.
+    (* Guard *)
+    edestruct (load_bytes_unchecked_store_bytes_covered m a bs1 _ _ _ _ E1 E2) as [r3 E3].
+    unfold load_bytes. rewrite footprint_app, List.map_app.
+    pose proof E1 as E1'. unfold load_bytes in E1'.
+    pose proof E3 as E3'. unfold load_bytes in E3'.
+    erewrite option_all_app by eassumption.
+    (* Compose *)
+    f_equal. subst m1' m2'.
+    cbv [unchecked_store_bytes].
+    rewrite OfListWord.map.of_list_word_at_app.
+    rewrite Properties.map.putmany_assoc.
+    rewrite Properties.map.disjoint_putmany_commutes. reflexivity.
+    eapply OfListWord.map.adjacent_arrays_disjoint. lia.
+  Qed.
+
+
+(* Writing lower n1 bytes, then upper n2 bytes, equals writing all (n1+n2) bytes. *)
+Lemma SetMem_compose m addr n1 n2 v m1 m2 :
+	(Z.of_nat n1 + Z.of_nat n2 <= 2^64)%Z ->
+  SetMem m addr n1 (Z.land v (Z.ones (8 * Z.of_nat n1))) = Some m1 ->
+  SetMem m1 (addr + Z.of_nat n1) n2 (Z.shiftr v (8 * Z.of_nat n1)) = Some m2 ->
+  SetMem m addr (n1 + n2) v = Some m2.
+Proof.
+  cbv [SetMem set_mem Crypto.Util.Option.bind].
+  intros H H1 H2.
+  destruct (store_bytes _ _ (le_split n1 _)) eqn:Hs1 in H1; [| discriminate].
+  inversion H1; subst m1; clear H1.
+  destruct (store_bytes _ _ (le_split n2 _)) eqn:Hs2 in H2; [| discriminate].
+  inversion H2; subst m2; clear H2.
+  rewrite le_split_app. rewrite le_split_bounds in Hs1.
+  erewrite store_bytes_app.
+  - reflexivity.
+	- rewrite !length_le_split. lia.
+  - exact Hs1.
+  - rewrite length_le_split. rewrite <- word.ring_morph_add. exact Hs2.
+Qed.
+
 Lemma R_Store_of_idx {opts : symbolic_options_computed_opt} {descr:description}
   {sa : AddressSize} (Hsa : sa = 64%N)
   n s m (HR : R s m)
+	(Hlen : Z.of_nat (8 * n) <= 2^64%Z)
   (addr : idx) va (Ha : eval s addr va)
   (i : idx) v (Hv : eval s i v)
   _tt s' (H : Store_of_idx n addr i s = Success (_tt, s'))
@@ -1577,7 +1622,7 @@ Proof using Type.
     cbn [Store_of_idx] in H.
     inversion_ErrorT; Prod.inversion_prod; subst.
 		unfold ret in H; inversion H; subst.
-    exists m. split; [apply SetMem_0 | split; eauto].
+    exists m. split; [ cbv; reflexivity | split; eauto].
   }
   { (* step: recursive Store_of_idx n' + App offset + App addr_k + App chunk + Store64 *)
     cbn [Store_of_idx] in H.
@@ -1591,6 +1636,7 @@ Proof using Type.
 
     eapply IH in HSx as (m1 & Hset1 & HR1 & Hsub1);
       try eassumption; try exact Hv_low.
+			2: { assert  (Z.of_nat (8 * n') <= Z.of_nat (8 * S n')) as Q; lia. }
     (* App_R for offset const (8 * n') *)
     eapply App_R in HSoffset as (HR2 & Hsub2 & Heval_offset); [| exact HR1 | repeat (econstructor; eauto)].
     (* App_R for addr_k = addr + offset *)
@@ -1618,8 +1664,11 @@ Proof using Type.
     rewrite SetMem_addr_mod in Hset2.
     exists m2. split; [|split; [exact HR5|]].
     { (* SetMem m va (8 * S n') v = Some m2 *)
+		
       replace (8 * S n')%nat with (8 * n' + 8)%nat by lia.
       eapply SetMem_compose.
+			{ replace (Z.of_nat (8 * n') + Z.of_nat 8) with ( Z.of_nat (8 * S n')) by lia.
+				 exact Hlen. }
       { rewrite SetMem_bounds. exact Hset1. }
       { replace (Z.of_nat (8 * n')) with (8 * Z.of_nat n') by lia.
         replace (8 * (8 * Z.of_nat n')) with (8 * Z.of_nat (8 * n')) by lia.
@@ -1637,7 +1686,7 @@ Corollary R_Store128_of_idx {opts : symbolic_options_computed_opt} {descr:descri
   _tt s' (H : Store128_of_idx addr i s = Success (_tt, s'))
   : exists m', SetMem m va 16%nat v = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
-  cbv [Store128_of_idx] in H. eapply R_Store_of_idx with (n := 2%nat); eauto.
+  cbv [Store128_of_idx] in H. eapply R_Store_of_idx with (n := 2%nat); eauto. lia.
 Qed.
 
 (* 256-bit store corollary *)
@@ -1648,13 +1697,9 @@ Corollary R_Store256_of_idx {opts : symbolic_options_computed_opt} {descr:descri
   _tt s' (H : Store256_of_idx addr i s = Success (_tt, s'))
   : exists m', SetMem m va 32%nat v = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
-  cbv [Store256_of_idx] in H. eapply R_Store_of_idx with (n := 4%nat); eauto.
+  cbv [Store256_of_idx] in H. eapply R_Store_of_idx with (n := 4%nat); eauto. lia.
 Qed.
 
-(* ============================================================ *)
-(* LEVEL 3: R_Store — top-level dispatch by operand size        *)
-(* Mirrors Load_R structure.                                    *)
-(* ============================================================ *)
 
 Lemma R_Store {opts : symbolic_options_computed_opt} {descr:description}
   {sz : OperationSize} {sa : AddressSize} (Hsa : sa = 64%N)
@@ -1968,25 +2013,26 @@ Section SymbolicVectorProofs.
     Symbolic.mapM_ f_sym l s = Success (tt, s') ->
     R s' (fold_left f_sem l m) /\ s :< s'.
   Proof using Type.
-  Admitted.
-    (* induction l as [|a l IH]; intros s0 m0 s_final HR0 Hsym.
+    induction l as [|a l IH]; intros s0 m0 s_final HR0 Hsym.
     - cbv [Symbolic.mapM_ Symbolic.mapM] in Hsym.
-      rewrite Symbolic.unfold_bind in Hsym.
-      cbv [Symbolic.ret] in Hsym.
-      inversion Hsym; subst. split; [exact HR0 | apply subsumed_refl].
+			step_symex; cbv [fst snd] in *; unfold ret in *.
+ 			inversion_ErrorT; Prod.inversion_prod; subst.
+
+      cbn [fold_left]. split; [exact HR0 | solve_subsumed].
     - cbn [fold_left].
       cbv [Symbolic.mapM_] in Hsym.
-      cbn [Symbolic.mapM] in Hsym.
-      rewrite !Symbolic.unfold_bind in Hsym.
-      destruct (f_sym a s0) as [[? s1]|] eqn:Hstep_a; [|inversion Hsym].
-      destruct (Symbolic.mapM f_sym l s1) as [[? s2]|] eqn:Hrest; [|inversion Hsym].
-      cbv [Symbolic.ret] in Hsym. inversion Hsym; subst.
-      destruct (Hstep a s0 m0 s1 HR0 Hstep_a) as [HR1 Hsub1].
-      assert (Hsym' : Symbolic.mapM_ f_sym l s1 = Success (tt, s_final)).
-      { cbv [Symbolic.mapM_]. rewrite Symbolic.unfold_bind. rewrite Hrest. cbv [Symbolic.ret]. reflexivity. }
-      destruct (IH s1 (f_sem m0 a) s_final HR1 Hsym') as [HR_final Hsub_final].
-      split; [exact HR_final | eauto using subsumed_trans].
-    Qed. *)
+			step_symex.
+      cbn [Symbolic.mapM] in HSx.
+			repeat step_symex; cbv [fst snd] in *.
+			cbv [ret] in HSx, Hsym.
+ 			inversion_ErrorT; Prod.inversion_prod; subst.
+			destruct b. 
+			edestruct (Hstep _ _ _ _ HR0 HSb) as [HR1 Hsub1].
+			assert (HSbs' : mapM_ f_sym l s1 = Success (tt, s_final)).
+			{ cbv [mapM_ bind ret]. rewrite HSbs. reflexivity. }
+			edestruct (IH _ _ _ HR1 HSbs') as [HR2 Hsub2].
+			split; [exact HR2 | solve_subsumed].
+Qed.
 
   Lemma vzeroupper_step_R {opts : symbolic_options_computed_opt} {descr : description}
     (yr : VREG) (s : symbolic_state) (m : machine_state) (s' : symbolic_state)
@@ -1999,7 +2045,14 @@ Section SymbolicVectorProofs.
                           (Z.land (get_reg m (VReg yr)) (Z.ones 128))))
     /\ s :< s'.
   Proof using Type.
-    repeat step_symex. step_GetReg. step_App. 
+    repeat step_symex. step_GetReg. step_App; cbv [fst snd] in *. 
+		{ repeat (econstructor; eauto). }
+		eapply R_SetReg in H; eauto.
+		destruct H as (m' & Hm' & HR' & Hsub'). 
+		Option.inversion_option. subst.
+  	split; [exact HR' | solve_subsumed].
+Qed.
+	
 
   Lemma interprets_as_add s : interprets_as_binop (add s) (fun a b => Z.land (a + b) (Z.ones (Z.of_N s))).
     Proof. intros a b. cbn [interp_op fold_right]. rewrite Z.add_0_r. reflexivity. Qed.
@@ -2256,54 +2309,66 @@ Ltac step :=
 Ltac step1 := step; (eassumption||trivial); [].
 Ltac step01 := solve [step] || step1.
 
-Lemma shiftl_0_r_N (v : Z) : Z.shiftl v (Z.of_N 0) = v.
-Proof. rewrite Z.shiftl_0_r. reflexivity. Qed.
-Print Z.shiftl_0_r.
 
+Lemma set_reg_get_reg (rs : reg_state) (r : REG) :
+  set_reg rs r (get_reg rs r) = rs.
+Proof.
+  cbv [set_reg get_reg].
+  destruct (index_and_shift_and_bitcount_of_reg r) as [[idx shift] bc].
+  apply Tuple.to_list_ext.
+  unshelve erewrite Tuple.from_list_default_eq, Tuple.to_list_from_list.
+  { rewrite ListUtil.length_update_nth. apply Tuple.length_to_list. }
+  apply List.nth_error_ext. intro i.
+  rewrite ListUtil.nth_update_nth.
+  destruct_one_match; trivial.
+  destruct (List.nth_error _ _) eqn:E; trivial. cbn [option_map].
+  f_equal. 
+	subst i.
+replace (Tuple.nth_default 0 (N.to_nat idx) rs) with z.
+2: { rewrite <- Tuple.nth_default_to_list.
+     cbv [nth_default]. rewrite E. reflexivity. }
+cbv [bits_set_slice]. bitblast.Z.bitblast.
+Qed.
+
+Lemma set_mem_get_mem (m : mem_state) addr n v :
+  get_mem m addr n = Some v -> set_mem m addr n v = Some m.
+Proof.
+  cbv [get_mem set_mem Crypto.Util.Option.bind].
+  destruct (load_bytes m (word.of_Z addr) n) as [bs|] eqn:Hl; [|discriminate].
+  intro H. step. subst v. 
+  pose proof (length_load_bytes _ _ _ _ Hl) as Hlen.
+  rewrite <- Hlen, split_le_combine.
+  cbv [store_bytes]. rewrite Hlen, Hl. f_equal.
+  cbv [unchecked_store_bytes].
+  apply map.map_ext. intro k.
+  rewrite Properties.map.get_putmany_dec.
+  rewrite OfListWord.map.get_of_list_word_at.
+  destruct (List.nth_error bs _) eqn:Enth; [|reflexivity].
+  assert (Hi : (Z.to_nat (word.unsigned (word.sub k (word.of_Z addr))) < n)%nat).
+  { rewrite <- Hlen. apply List.nth_error_Some. congruence. }
+  pose proof (Memory.nth_error_load_bytes _ _ _ _ Hl _ Hi) as Hm.
+  rewrite Enth in Hm. rewrite Hm. f_equal.
+  rewrite Z2Nat.id by apply word.unsigned_range.
+  rewrite word.of_Z_unsigned. ring.
+Qed.
 
 (* Denote gets the value of a register, Set actually changes the machine state *)
 (* This says that setting something to its current value returns the same machine state *)
 Lemma SetOperand_same (n : N) (a : ARG) (v : Z) (m m' : machine_state) 
   (Hd : DenoteOperand 64 n m a = Some v) (Hs : SetOperand 64 n m a v = Some m')
   : m = m'.
-Proof using Type.
-Admitted.
-  (* destruct a, m; cbn -[DenoteAddress] in *; repeat (subst; Option.inversion_option).
-  { cbv [update_reg_with set_reg]; cbn in *; f_equal.
-    eapply Tuple.to_list_ext.
-    rewrite <-Tuple.nth_default_to_list in Hd; rewrite <-Hd; clear Hd.
-    unshelve erewrite Tuple.from_list_default_eq, Tuple.to_list_from_list.
-    { abstract (rewrite Crypto.Util.ListUtil.length_update_nth; eapply Tuple.length_to_list). }
-    eapply List.nth_error_ext; intro i; cbv [nth_default].
-    rewrite Crypto.Util.ListUtil.nth_update_nth; destruct_one_match; subst; trivial.
-    destruct_one_match; cbn; trivial; eapply f_equal.
-    eapply Z.bits_inj_iff'; intros i Hi.
-    repeat rewrite ?Z.land_spec, ?Z.ldiff_spec, ?Z.lor_spec, ?bitblast.Z.shiftr_spec', ?bitblast.Z.shiftl_spec', ?Z.testbit_ones, ?Z.testbit_0_l by (clear;lia).
-    destr (i <? 0); cbn; try lia.
-    destr (i - Z.of_N (reg_offset r) <? 0); cbn; try lia.
-    { destr (0 <=? i - Z.of_N (reg_offset r)); cbn; rewrite ?Bool.andb_true_r; trivial.
-      destr (i - Z.of_N (reg_offset r) <? Z.of_N (reg_size r)); cbn; try Btauto.btauto.
-      lia. }
-    destr (0 <=? i - Z.of_N (reg_offset r)); try lia; cbn.
-    replace (i - Z.of_N (reg_offset r) + Z.of_N (reg_offset r)) with i by lia.
-    destr (i - Z.of_N (reg_offset r) <? Z.of_N (reg_size r)); Btauto.btauto. }
-  { destruct m'; cbv [SetMem update_mem_with Crypto.Util.Option.bind get_mem option_map set_mem store_bytes unchecked_store_bytes] in *; repeat (destruct_one_match_hyp || Option.inversion_option).
-    inversion Hs; clear Hs; subst; f_equal.
-    clear E0.
-    change (@map.putmany ?K ?V ?M ?m) with (@map.putmany K V M machine_mem_state).
-    set (word.of_Z _) as a in *; clearbody a.
-    rename n into n'; set (N.to_nat (operand_size m0 n' / 8)) as n in *; clearbody n; clear n'.
-    epose proof (length_load_bytes _ _ _ _ E1) as Hl; rewrite <-Hl, split_le_combine.
-    eapply (@map.map_ext _ _ mem_state _); intro k.
-    rewrite Properties.map.get_putmany_dec, OfListWord.map.get_of_list_word_at.
-    destruct_one_match; trivial.
-    epose proof ListUtil.nth_error_value_length _ _ _ _ E.
-    rewrite <-E; clear E.
-    rewrite (nth_error_load_bytes _ _ _ _ E1 (Z.to_nat (word.unsigned (word.sub k a))) ltac:(lia)).
-    rewrite Z2Nat.id, word.of_Z_unsigned by (eapply Properties.word.unsigned_range).
-    f_equal. ring. }
-Qed. *)
-
+Proof.
+  destruct a; unfold DenoteOperand, SetOperand in *; try discriminate.
+  - (* reg *)
+    repeat Option.inversion_option. subst v m'. unfold update_reg_with.
+    rewrite set_reg_get_reg.
+    destruct m; reflexivity.
+  - (* mem *)
+    cbv [SetMem Crypto.Util.Option.bind] in Hs.
+    apply set_mem_get_mem in Hd.
+    rewrite Hd in Hs.
+    inversion Hs. destruct m; reflexivity.
+Qed.
 
 (* Executing instruction in state s gives state s' *)
 (* exists a machine state correponding to s' s.t.  *)
@@ -2567,7 +2632,7 @@ Proof using Type.
 
   Unshelve. all : match goal with H : context[Syntax.vzeroupper] |- _ => idtac | _ => shelve end; shelve_unifiable.  
   { (* vzeroupper: each YMM gets slice 0 128, matching Z.land _ (Z.ones 128) *)
-    eapply mapM_fold_left_R in H. exact H. exact vzeroupper_step_R. exact HR.
+    eapply mapM_fold_left_R in H. exact H. intros. apply vzeroupper_step_R; assumption. exact HR.
   }
 
   (* vpaddq *)
