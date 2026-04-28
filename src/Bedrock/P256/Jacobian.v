@@ -1,9 +1,12 @@
-Require Import coqutil.Datatypes.List Coq.Lists.List.
+Require Import coqutil.Datatypes.List.
 Require Import Bedrock.P256.Specs.
 
 Import Specs.NotationsCustomEntry Specs.coord Specs.point.
+Import Crypto.Spec.WeierstrassCurve.
+Import Curves.Weierstrass.P256.
 
 Import bedrock2.Syntax bedrock2.NotationsCustomEntry
+bedrock2.ZnWords
 LittleEndianList
 Crypto.Util.ZUtil.Modulo Zdiv ZArith BinInt
 BinInt BinNat Init.Byte
@@ -12,7 +15,7 @@ micromega.Lia
 coqutil.Byte
 Lists.List micromega.Lia
 Jacobian
-Coq.Strings.String Coq.Lists.List 
+Coq.Strings.String Coq.Lists.List
 ProgramLogic WeakestPrecondition
 ProgramLogic.Coercions
 Word.Interface OfListWord Separation SeparationLogic
@@ -26,6 +29,8 @@ Tactics
 UniquePose
 micromega.Lia Word.Properties.
 
+Require Import  Coq.Lists.List.
+
 Import Zbool. (*compat 8.20*)
 Import ListIndexNotations.
 Local Open Scope list_index_scope.
@@ -34,11 +39,7 @@ Local Open Scope bool_scope.
 Local Open Scope string_scope.
 Local Open Scope list_scope.
 
-Local Notation "xs $@ a" := (map.of_list_word_at a xs)
-  (at level 10, format "xs $@ a").
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
-Local Coercion F.to_Z : F >-> Z.
+Import (notations) coqutil.Map.Memory.
 
 
 Import Coq.micromega.Lia.
@@ -66,6 +67,27 @@ Proof.
   setoid_rewrite word.not_broadcast; rewrite Bool.negb_involutive; trivial.
 Qed.
 
+Definition p256_point_set_zero := func! (p_P) {
+  br_memset(p_P, $0, $(3*32))
+}.
+
+Lemma p256_point_set_zero_ok : program_logic_goal_for_function! p256_point_set_zero.
+Proof.
+  cbv [spec_of_p256_point_set_zero].
+  repeat straightline.
+
+  cbv [point.to_bytes] in *.
+
+  straightline_call; ssplit.
+  { ecancel_assumption. }
+  { ZnWords. }
+  repeat straightline.
+
+  cbv [fst snd proj1_sig Jacobian.of_affine Jacobian.of_affine_impl W.zero coord.to_bytes].
+  rewrite List.le_split_0_r. rewrite <- !repeat_app.
+  use_sep_assumption. Morphisms.f_equiv.
+Qed.
+
 Definition p256_coord_halve := func!(y, x) {
   stackalloc 32 as mmh;
   unpack! m = br_broadcast_odd(load(x));
@@ -73,7 +95,6 @@ Definition p256_coord_halve := func!(y, x) {
   u256_shr(y, x, $1);
   p256_coord_sub(y, y, mmh)
 }.
-
 
 Local Ltac length_tac :=
   repeat rewrite
@@ -105,7 +126,7 @@ Proof.
     repeat straightline. }
 
   straightline_call; [eexists; ecancel_assumption|]; repeat straightline.
-  
+
   seprewrite_in_by Array.array1_iff_eq_of_list_word_at Hm0 ltac:(Lia.lia).
 
   straightline_call; ssplit; [ ecancel_assumption | trivial | exact eq_refl | ].
@@ -123,7 +144,7 @@ Proof.
 
   repeat straightline.
   rewrite ?Z.pow_1_r in *.
-  
+
   set (Z.odd _) as b in *.
 
   eapply WeakestPreconditionProperties.Proper_call; cycle -1;
@@ -140,7 +161,7 @@ Proof.
     cancel. }
   { ecancel_assumption. }
   { length_tac. }
-  
+
   repeat straightline.
 
   (* stackdealloc *)
@@ -234,14 +255,11 @@ rewrite ?app_length, ?length_coord in *.
 
   progress change (Z.of_nat 32) with 32 in *.
 
-  (* WHY does skipn get unfolded below without this?
-   *) repeat (set (List.skipn  _ _) in H25 || set (List.firstn  _ _) in H25).
-
   repeat (straightline_call; ssplit;
     [ solve [repeat match goal with
       | |- True => exact I
       | |- exists _, _ => letexists
-      | |- _ => subst l10 l11 l12; progress rewrite ?length_coord, ?firstn_length, ?skipn_length; Lia.lia
+      | |- _ => progress rewrite ?length_coord, ?firstn_length, ?skipn_length; ZnWords
       | _ => ecancel_assumption
       end] ..
     | repeat straightline ]).
@@ -255,14 +273,14 @@ rewrite ?app_length, ?length_coord in *.
 
   (* postcondition *)
   eexists; ssplit.
-  { 
+  {
     cbv [proj1_sig proj2_sig fst snd point.to_bytes].
     repeat seprewrite_in_by Array.list_word_at_app_of_adjacent_eq H93 ltac:(rewrite ?length_coord; listZnWords).
     (* other direction: repeat seprewrite_by Array.sep_eq_of_list_word_at_app ltac:(rewrite ?length_coord, ?app_length; trivial; try Lia.lia). *)
     ecancel_assumption. }
   { rewrite ?app_length, ?length_point, ?length_coord; trivial. }
 
-  case (Properties.word.eqb_spec x3 $0); subst x3; rewrite word.lor_0_iff; [right|left]; split; trivial.
+  case (Properties.word.eqb_spec x3 (word.of_Z 0)); subst x3; rewrite word.lor_0_iff; [right|left]; split; trivial.
   { case H121 as [Hx Hy].
     subst x x0.
     rewrite !word.broadcast_0_iff in *.
@@ -271,7 +289,7 @@ rewrite ?app_length, ?length_coord in *.
     case Decidable.dec; intros; try contradiction; split; trivial.
     rewrite Hierarchy.commutative in Hx.
     rewrite <-!F.pow_succ_r in Hx, Hy; simpl N.succ in Hx, Hy.
-    cbv [coord] in Hx, Hy; rewrite F.pow_0_iff, Ring.sub_zero_iff in Hx, Hy by (lia||exact _).
+    rewrite F.pow_0_iff, Ring.sub_zero_iff in Hx, Hy by (lia||exact _).
     rewrite ?F.pow_3_r, ?F.pow_2_r in Hx.
     rewrite ?F.pow_3_r, ?F.pow_2_r in Hy.
     split; Field.fsatz. }
@@ -339,8 +357,6 @@ Proof.
   { rewrite ?repeat_length; trivial. }
   { rewrite length_point; trivial. }
 
-  rewrite ?word.and_xorm1_l, ?word.and_xorm1_r in *.
-
   subst x x0 x3.
   letexists; ssplit; repeat straightline; subst v (* if ok *).
   { straightline_call; repeat straightline; ssplit (* memcpy *).
@@ -379,23 +395,13 @@ Proof.
       rewrite Jacobian.eq_iff, Jacobian.to_affine_add, HP.
 Import Curves.Weierstrass.AffineProofs.
       symmetry.
-      unshelve eapply Hierarchy.left_identity.
-      unshelve eapply Hierarchy.monoid_is_left_identity.
-      unshelve eapply Hierarchy.group_monoid; shelve_unifiable.
-      unshelve eapply Hierarchy.commutative_group_group.
-      unshelve eapply W.commutative_group; try exact _.
-      cbv [id]. abstract Decidable.vm_decide. }
+      eapply Hierarchy.left_identity. }
     { (* P + 0 *)
       eexists; split. { ecancel_assumption. }
       apply Decidable.dec_bool, Jacobian.iszero_iff in HQ.
       rewrite Jacobian.eq_iff, Jacobian.to_affine_add, HQ.
       symmetry.
-      unshelve eapply Hierarchy.right_identity.
-      unshelve eapply Hierarchy.monoid_is_right_identity.
-      unshelve eapply Hierarchy.group_monoid; shelve_unifiable.
-      unshelve eapply Hierarchy.commutative_group_group.
-      unshelve eapply W.commutative_group; try exact _.
-      cbv [id]. abstract Decidable.vm_decide. }
+      unshelve eapply Hierarchy.right_identity. }
     { (* nz + nz' *)
       rewrite <-Bool.not_true_iff_false in HP, HQ.
       (* Decidable.dec_iff? *)
@@ -418,9 +424,9 @@ Import Curves.Weierstrass.AffineProofs.
     rewrite <-Bool.not_true_iff_false in HP, HQ.
     cbv [iszero] in HP, HQ; case Decidable.dec in HP; case Decidable.dec in HQ; try congruence.
     case (H19 ltac:(trivial) ltac:(trivial)) as [[HE ?]|[? HE]]; [case (HE eq_refl)|].
-    
+
     straightline_call; repeat straightline.
-    { split. { ecancel_assumption. } 
+    { split. { ecancel_assumption. }
       rewrite ?map_length, ?combine_length, ?repeat_length.
       rewrite H18, length_point. clear; ZnWords.ZnWords. }
 
@@ -483,7 +489,7 @@ Proof.
   rewrite <-(firstn_skipn 32 (skipn _ out)) in H18.
   rewrite !skipn_skipn in H18.
 rewrite ?app_length, ?length_coord in *.
-  progress repeat seprewrite_in_by Array.sep_eq_of_list_word_at_app H18 
+  progress repeat seprewrite_in_by Array.sep_eq_of_list_word_at_app H18
     ltac:(repeat rewrite ?app_length, ?firstn_length, ?skipn_length, ?Nat.min_l; try Lia.lia; trivial).
 
   progress change (Z.of_nat 32) with 32 in *.
@@ -547,90 +553,3 @@ rewrite ?app_length, ?length_coord in *.
   rewrite ?F.pow_3_r, ?F.pow_2_r in H69.
   ecancel_assumption.
 Qed.
-
-Import BinInt. Local Open Scope Z_scope.
-
-Definition fe_set_1 := func! (o) {
-  o0 = $1; o1 = $0xffffffff00000000; o2 = -$1; o3 = $0xfffffffe;
-  store(o, o0); store(o+$8, o1); store(o+$16, o2); store(o+$24, o3)
-}.
-
-Definition p256_point_add_affine_nz_nz_neq := func! (out, in1, in2) ~> ok {
-  stackalloc 32 as z1z1;
-  stackalloc 32 as u2;
-  stackalloc 32 as h;
-  stackalloc 32 as s2;
-  stackalloc 32 as r;
-  stackalloc 32 as Hsqr;
-  stackalloc 32 as Hcub;
-
-  p256_coord_sqr(z1z1, in1.+$32.+$32);
-  p256_coord_mul(u2, in2, z1z1);
-  p256_coord_sub(h, u2, in1);
-  p256_coord_mul(s2, in1.+$32.+$32, z1z1);
-  p256_coord_mul(out.+$32.+$32, h, in1.+$32.+$32);
-  p256_coord_mul(s2, s2, in2.+$32);
-  p256_coord_sub(r, s2, in1.+$32);
-  p256_coord_sqr(Hsqr, h);
-  p256_coord_sqr(out, r);
-  p256_coord_mul(Hcub, Hsqr, h);
-  p256_coord_mul(u2, in1, Hsqr);
-
-  unpack! different_x = p256_coord_nonzero(Hcub);
-  unpack! different_y = p256_coord_nonzero(out);
-  unpack! ok = br_value_barrier(different_x | different_y);
-
-  p256_coord_sub(out, out, Hcub);
-  p256_coord_sub(out, out, u2);
-  p256_coord_sub(out, out, u2);
-  p256_coord_sub(h, u2, out);
-  p256_coord_mul(s2, Hcub, in1.+$32);
-  p256_coord_mul(h, h, r); 
-  p256_coord_sub(out.+$32, h, s2)
-}.
-
-Definition p256_point_add_affine_conditional := func! (out, in1, in2, c) {
-  unpack! p1zero = p256_point_iszero(in1.+$32.+$32);
-  unpack! p2zero = constant_time_is_zero_w(c);
-  stackalloc (3*32) as p_out;
-  unpack! ok = p256_point_add_affine_nz_nz_neq(p_out, in1, in2);
-  unpack! ok = br_declassify(p1zero | p2zero | ok);
-  stackalloc (3*32) as t;
-  br_memset(t, $0, $3*$32);
-  memcxor(t, p_out,  $3*$32,     ~p1zero & ~p2zero);
-  memcxor(t, in1,    $3*$32,     ~p1zero &  p2zero);
-  memcxor(t, in2,    $3*$32,      p1zero & ~p2zero);
-  if !ok { p256_point_double(t, in1) };
-  br_memcpy(out, t, $(3*32))
-}.
-
-Definition sc_halve := func!(y, x) {
-  unpack! m = br_value_barrier(-(load(x)&$1)); (* is x odd? *)
-  mh0 = $0x79dce5617e3192a8; mh1 = $0xde737d56d38bcf42; mh2 = $0x7fffffffffffffff; mh3 = $0x7fffffff80000000; (* minus one half modulo l *)
-  stackalloc 32 as mmh; (* maybe minus half *)
-  store(mmh, m&mh0); store(mmh+$8, m&mh1); store(mmh+$16, m&mh2); store(mmh+$24, m&mh3);
-  y0 = load(y); y1 = load(y+$8); y2 = load(y+$16); y3 = load(y+$24);
-  unpack! y0 = shrd_64(y0, y1, $1);
-  unpack! y1 = shrd_64(y1, y2, $1);
-  unpack! y2 = shrd_64(y2, y3, $1);
-  y3 = y3 >> $1;
-  store(y, y0); store(y+$8, y1); store(y+$16, y2); store(y+$24, y3);
-  sc_sub(y, y, mmh)
-}.
-
-Definition sc_sub := func!(out, x, y) {
-  unpack! x1, x2 = sbb64($0, load(x), load(y));
-  unpack! x3, x4 = sbb64(x2, load(x+$8), load(y+$8));
-  unpack! x5, x6 = sbb64(x4, load(x+$16), load(y+$16));
-  unpack! x7, x8 = sbb64(x6, load(x+$24), load(y+$24));
-  x9 = -x8;
-  unpack! x10, x11 = adc64($0, x1, x9 & $0xf3b9cac2fc632551);
-  unpack! x12, x13 = adc64(x11, x3, x9 & $0xbce6faada7179e84);
-  unpack! x14, x15 = adc64(x13, x5, x9);
-  unpack! x16, x17 = adc64(x15, x7, x9 << $32);
-  x17 = x17+$0;
-  store(out, x10);
-  store(out+$8, x12);
-  store(out+$16, x14);
-  store(out+$24, x16)
-}.

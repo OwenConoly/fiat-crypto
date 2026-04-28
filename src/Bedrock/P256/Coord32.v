@@ -1,4 +1,5 @@
 Require Import coqutil.Datatypes.List Coq.Lists.List.
+Require Import Curves.Weierstrass.P256.
 Require Import Bedrock.P256.Specs.
 Require Import Bedrock.P256.Platform.
 Import bedrock2.NotationsCustomEntry Specs.NotationsCustomEntry.
@@ -15,23 +16,23 @@ Definition p256_coord_nonzero := func! (p_x) ~> nz {
 
 (*
 Definition p256_coord_sub := func!(out, x, y) {
-  unpack! t0, borrow = full_sub(load(x),          load(y),          $0);
-  unpack! t1, borrow = full_sub(load(x+$4),       load(y+$4),       borrow);
-  unpack! t2, borrow = full_sub(load(x+$4+$4),    load(y+$4+$4),    borrow);
-  unpack! t3, borrow = full_sub(load(x+$4+$4+$4), load(y+$4+$4+$4), borrow);
-  unpack! t4, borrow = full_sub(load(x+$4+$4+$4+$4), load(y+$4+$4+$4+$4), borrow);
-  unpack! t5, borrow = full_sub(load(x+$4+$4+$4+$4+$4), load(y+$4+$4+$4+$4+$4), borrow);
-  unpack! t6, borrow = full_sub(load(x+$4+$4+$4+$4+$4+$4), load(y+$4+$4+$4+$4+$4+$4), borrow);
-  unpack! t7, borrow = full_sub(load(x+$4+$4+$4+$4+$4+$4+$4), load(y+$4+$4+$4+$4+$4+$4+$4), borrow);
+  unpack! t0, borrow = br_full_sub(load(x),          load(y),          $0);
+  unpack! t1, borrow = br_full_sub(load(x+$4),       load(y+$4),       borrow);
+  unpack! t2, borrow = br_full_sub(load(x+$4+$4),    load(y+$4+$4),    borrow);
+  unpack! t3, borrow = br_full_sub(load(x+$4+$4+$4), load(y+$4+$4+$4), borrow);
+  unpack! t4, borrow = br_full_sub(load(x+$4+$4+$4+$4), load(y+$4+$4+$4+$4), borrow);
+  unpack! t5, borrow = br_full_sub(load(x+$4+$4+$4+$4+$4), load(y+$4+$4+$4+$4+$4), borrow);
+  unpack! t6, borrow = br_full_sub(load(x+$4+$4+$4+$4+$4+$4), load(y+$4+$4+$4+$4+$4+$4), borrow);
+  unpack! t7, borrow = br_full_sub(load(x+$4+$4+$4+$4+$4+$4+$4), load(y+$4+$4+$4+$4+$4+$4+$4), borrow);
   unpack! mask = br_value_barrier(-borrow);
-  unpack! r0, carry = full_add(t0, mask,   $0);
-  unpack! r1, carry = full_add(t1, mask,   carry);
-  unpack! r2, carry = full_add(t2, mask,   carry);
-  unpack! r3, carry = full_add(t3, $0,     carry);
-  unpack! r4, carry = full_add(t4, $0,     carry);
-  unpack! r5, carry = full_add(t5, $0,     carry);
-  unpack! r6, carry = full_add(t6, borrow, carry);
-  unpack! r7, carry = full_add(t7, mask,   carry);
+  unpack! r0, carry = br_full_add(t0, mask,   $0);
+  unpack! r1, carry = br_full_add(t1, mask,   carry);
+  unpack! r2, carry = br_full_add(t2, mask,   carry);
+  unpack! r3, carry = br_full_add(t3, $0,     carry);
+  unpack! r4, carry = br_full_add(t4, $0,     carry);
+  unpack! r5, carry = br_full_add(t5, $0,     carry);
+  unpack! r6, carry = br_full_add(t6, borrow, carry);
+  unpack! r7, carry = br_full_add(t7, mask,   carry);
   store(out,          r0);
   store(out+$4,       r1);
   store(out+$4+$4,    r2);
@@ -106,7 +107,7 @@ micromega.Lia
 coqutil.Byte
 Lists.List micromega.Lia
 Jacobian
-Coq.Strings.String Coq.Lists.List 
+Coq.Strings.String Coq.Lists.List
 ProgramLogic WeakestPrecondition
 ProgramLogic.Coercions
 Word.Interface OfListWord Separation SeparationLogic SeparationMemory
@@ -127,11 +128,8 @@ Local Open Scope bool_scope.
 Local Open Scope string_scope.
 Local Open Scope list_scope.
 
-Local Notation "xs $@ a" := (map.of_list_word_at a xs)
-  (at level 10, format "xs $@ a").
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
-Local Coercion F.to_Z : F >-> Z.
+Import (notations) coqutil.Map.Memory.
+
 
 Import Specs.NotationsCustomEntry Specs.coord Specs.point.
 Local Ltac length_tac :=
@@ -209,7 +207,7 @@ Proof.
   repeat seprewrite_in_by (@sep_eq_of_list_word_at_app) Hm length_tac;
   repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm length_tac;
   repeat seprewrite_in_by @Scalars.scalar_of_bytes Hm length_tac;
-  rewrite ?le_combine_split in Hm by lia 
+  rewrite ?le_combine_split in Hm by lia
   in domem H2; domem H3.
 
   simpl Z.of_nat in *; simpl Z.mul in *; simpl Z.add in *; simpl Nat.add in *.
@@ -244,7 +242,7 @@ Proof.
   all : apply Z.bits_inj'; intros i Hi;
   repeat rewrite <-?Z.shiftr_div_pow2, ?Z.land_spec, ?Z.lor_spec, ?Z.shiftr_spec', ?Z.shiftl_spec', ?Z.testbit_ones by try ZnWords.ZnWords.
   all: repeat (rewrite
-      ?Bool.andb_true_l, ?Bool.andb_true_r, ?Bool.orb_true_l, ?Bool.orb_true_r, 
+      ?Bool.andb_true_l, ?Bool.andb_true_r, ?Bool.orb_true_l, ?Bool.orb_true_r,
       ?Bool.andb_false_l, ?Bool.andb_false_r, ?Bool.orb_false_l, ?Bool.orb_false_r,
       ?Z.testbit_0_l, ?Z.testbit_neg_r, ?Z.testbit_high
     by intuition (idtac;
@@ -263,7 +261,7 @@ Proof.
   cbv [spec_of_p256_coord_set_minushalf_conditional].
   straightline; repeat straightline_cleanup.
   rename H into Hm.
-   
+
   rewrite <-(firstn_skipn 4 out), <-(firstn_skipn 4 out[_:]), <-(firstn_skipn 4 out[_:][_:]),
          <-(firstn_skipn 4 out[_:][_:][_:]),
          <-(firstn_skipn 4 out[_:][_:][_:][_:]),
@@ -289,7 +287,7 @@ Proof.
   simpl Nat.add in Hm.
 
   revert Hm; eassert ((_ ++ _) = _)%list as ->; [|intros;ecancel_assumption].
-  eapply le_combine_inj. { length_tac. } 
+  eapply le_combine_inj. { length_tac. }
   repeat match goal with x := _ |- _ => subst x end.
   case b; Decidable.vm_decide.
 Qed.

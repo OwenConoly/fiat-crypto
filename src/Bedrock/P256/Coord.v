@@ -1,4 +1,5 @@
 Require Import coqutil.Datatypes.List Coq.Lists.List.
+Require Import Curves.Weierstrass.P256.
 Require Import Bedrock.P256.Specs.
 Require Import Bedrock.P256.Platform.
 
@@ -13,7 +14,7 @@ micromega.Lia
 coqutil.Byte
 Lists.List micromega.Lia
 Jacobian
-Coq.Strings.String Coq.Lists.List 
+Coq.Strings.String Coq.Lists.List
 ProgramLogic WeakestPrecondition
 ProgramLogic.Coercions
 Word.Interface OfListWord Separation SeparationLogic
@@ -35,11 +36,7 @@ Local Open Scope bool_scope.
 Local Open Scope string_scope.
 Local Open Scope list_scope.
 
-Local Notation "xs $@ a" := (map.of_list_word_at a xs)
-  (at level 10, format "xs $@ a").
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
-Local Coercion F.to_Z : F >-> Z.
+Import (notations) coqutil.Map.Memory.
 
 
 Definition p256_coord_nonzero := func! (p_x) ~> nz {
@@ -47,15 +44,15 @@ Definition p256_coord_nonzero := func! (p_x) ~> nz {
 }.
 
 Definition p256_coord_sub := func!(out, x, y) {
-  unpack! t0, borrow = full_sub(load(x),          load(y),          $0);
-  unpack! t1, borrow = full_sub(load(x+$8),       load(y+$8),       borrow);
-  unpack! t2, borrow = full_sub(load(x+$8+$8),    load(y+$8+$8),    borrow);
-  unpack! t3, borrow = full_sub(load(x+$8+$8+$8), load(y+$8+$8+$8), borrow);
+  unpack! t0, borrow = br_full_sub(load(x),          load(y),          $0);
+  unpack! t1, borrow = br_full_sub(load(x+$8),       load(y+$8),       borrow);
+  unpack! t2, borrow = br_full_sub(load(x+$8+$8),    load(y+$8+$8),    borrow);
+  unpack! t3, borrow = br_full_sub(load(x+$8+$8+$8), load(y+$8+$8+$8), borrow);
   unpack! mask = br_value_barrier(-borrow);
-  unpack! r0, carry = full_add(t0, mask,                       $0);
-  unpack! r1, carry = full_add(t1, mask & $0xffffffff,         carry);
-  unpack! r2, carry = full_add(t2, $0,                         carry);
-  unpack! r3, carry = full_add(t3, mask & $0xffffffff00000001, carry);
+  unpack! r0, carry = br_full_add(t0, mask,                       $0);
+  unpack! r1, carry = br_full_add(t1, mask & $0xffffffff,         carry);
+  unpack! r2, carry = br_full_add(t2, $0,                         carry);
+  unpack! r3, carry = br_full_add(t3, mask & $0xffffffff00000001, carry);
   store(out,          r0);
   store(out+$8,       r1);
   store(out+$8+$8,    r2);
@@ -80,15 +77,15 @@ Definition u256_set_p256_minushalf_conditional := func!(p_out, mask) {
 }.
 
 Definition p256_coord_add := func!(p_out, p_x, p_y) {
-  unpack! t0, carry = full_add(load(p_x),          load(p_y),          $0);
-  unpack! t1, carry = full_add(load(p_x+$8),       load(p_y+$8),       carry);
-  unpack! t2, carry = full_add(load(p_x+$8+$8),    load(p_y+$8+$8),    carry);
-  unpack! t3, carry = full_add(load(p_x+$8+$8+$8), load(p_y+$8+$8+$8), carry);
-  unpack! r0, borrow = full_sub(t0, $0xffffffffffffffff, $0);
-  unpack! r1, borrow = full_sub(t1, $0xffffffff,         borrow);
-  unpack! r2, borrow = full_sub(t2, $0,                  borrow);
-  unpack! r3, borrow = full_sub(t3, $0xffffffff00000001, borrow);
-  unpack! r4, borrow = full_sub(carry, $0, borrow);
+  unpack! t0, carry = br_full_add(load(p_x),          load(p_y),          $0);
+  unpack! t1, carry = br_full_add(load(p_x+$8),       load(p_y+$8),       carry);
+  unpack! t2, carry = br_full_add(load(p_x+$8+$8),    load(p_y+$8+$8),    carry);
+  unpack! t3, carry = br_full_add(load(p_x+$8+$8+$8), load(p_y+$8+$8+$8), carry);
+  unpack! r0, borrow = br_full_sub(t0, $0xffffffffffffffff, $0);
+  unpack! r1, borrow = br_full_sub(t1, $0xffffffff,         borrow);
+  unpack! r2, borrow = br_full_sub(t2, $0,                  borrow);
+  unpack! r3, borrow = br_full_sub(t3, $0xffffffff00000001, borrow);
+  unpack! r4, borrow = br_full_sub(carry, $0, borrow);
   unpack! r0 = br_cmov(borrow, t0, r0);
   unpack! r1 = br_cmov(borrow, t1, r1);
   unpack! r2 = br_cmov(borrow, t2, r2);
@@ -182,7 +179,7 @@ Proof.
   repeat seprewrite_in_by (@Array.sep_eq_of_list_word_at_app) Hm length_tac;
   repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm length_tac;
   repeat seprewrite_in_by @Scalars.scalar_of_bytes Hm length_tac;
-  rewrite ?le_combine_split in Hm by lia 
+  rewrite ?le_combine_split in Hm by lia
   in domem H2; domem H3.
 
   simpl Z.of_nat in *; simpl Z.mul in *; simpl Z.add in *; simpl Nat.add in *.
@@ -207,7 +204,7 @@ Proof.
   all : apply Z.bits_inj'; intros i Hi;
   repeat rewrite <-?Z.shiftr_div_pow2, ?Z.land_spec, ?Z.lor_spec, ?Z.shiftr_spec', ?Z.shiftl_spec', ?Z.testbit_ones by try ZnWords.ZnWords.
   all: repeat (rewrite
-      ?Bool.andb_true_l, ?Bool.andb_true_r, ?Bool.orb_true_l, ?Bool.orb_true_r, 
+      ?Bool.andb_true_l, ?Bool.andb_true_r, ?Bool.orb_true_l, ?Bool.orb_true_r,
       ?Bool.andb_false_l, ?Bool.andb_false_r, ?Bool.orb_false_l, ?Bool.orb_false_r,
       ?Z.testbit_0_l, ?Z.testbit_neg_r, ?Z.testbit_high
     by intuition (idtac;
@@ -247,7 +244,7 @@ Proof.
   repeat seprewrite_in_by (@Array.sep_eq_of_list_word_at_app) Hm length_tac;
   repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm length_tac;
   repeat seprewrite_in_by @Scalars.scalar_of_bytes Hm length_tac;
-  rewrite ?le_combine_split, ?Z.shiftr_div_pow2 in Hm by lia 
+  rewrite ?le_combine_split, ?Z.shiftr_div_pow2 in Hm by lia
   in domem H8; domem H9; domem H10.
 
   simpl Z.of_nat in *; simpl Z.mul in *; simpl Z.add in *; simpl Nat.add in *.
@@ -322,7 +319,7 @@ Proof.
   repeat seprewrite_in_by (@Array.sep_eq_of_list_word_at_app) Hm length_tac;
   repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm length_tac;
   repeat seprewrite_in_by @Scalars.scalar_of_bytes Hm length_tac;
-  rewrite ?le_combine_split, ?Z.shiftr_div_pow2 in Hm by lia 
+  rewrite ?le_combine_split, ?Z.shiftr_div_pow2 in Hm by lia
   in domem H8; domem H9; domem H10.
 
   simpl Z.of_nat in *; simpl Z.mul in *; simpl Z.add in *; simpl Nat.add in *.
@@ -365,7 +362,7 @@ Proof.
   cbv [spec_of_p256_coord_set_minushalf_conditional].
   straightline; repeat straightline_cleanup.
   rename H into Hm.
-   
+
   rewrite <-(firstn_skipn 8 out), <-(firstn_skipn 8 out[_:]), <-(firstn_skipn 8 out[_:][_:]), ?skipn_skipn, ?firstn_skipn in Hm.
   repeat seprewrite_in_by (@Array.sep_eq_of_list_word_at_app) Hm length_tac.
   repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm length_tac.
@@ -382,7 +379,7 @@ Proof.
   repeat seprewrite_in_by (@Array.list_word_at_app_of_adjacent_eq) Hm ltac:(rewrite ?app_length, ?length_le_split, ?length_nil; try ZnWords.ZnWords).
 
   revert Hm; eassert ((_ ++ _) = _)%list as ->; [|intros;ecancel_assumption].
-  eapply le_combine_inj. { length_tac. } 
+  eapply le_combine_inj. { length_tac. }
   subst v v0 v1 v2 mask mh0 mh1 mh2 mh3.
   case b; Decidable.vm_decide.
 Qed.

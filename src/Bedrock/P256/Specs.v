@@ -129,16 +129,11 @@ Module Byte.
   Qed.
 End Byte.
 
-Local Open Scope Z_scope.
 
-Definition p256 : positive := 2^256 - 2^224 + 2^192 + 2^96 - 1.
+Require Import Curves.Weierstrass.P256.
 
-#[export] Instance prime_p256 : Znumtheory.prime p256. Admitted.
-
-Local Coercion F.to_Z : F >-> Z.
-
-Definition coord := F p256.
 Module Import coord. (* bytes in montgomery form *)
+  Notation coord := (F p256).
   Definition R : F p256 := F.of_Z _ (2^256).
   Coercion to_bytes (x : coord) : list byte := Z.to_bytes 32 (x * R)%F.
   Lemma length_coord (x : coord) : length x = 32%nat.
@@ -152,21 +147,19 @@ Module Import coord. (* bytes in montgomery form *)
   Qed.
 End coord.
 
-#[export] Instance coord_char_ge_3 : @Ring.char_ge coord eq 0%F 1%F F.opp F.add F.sub F.mul 3.
-Proof.  intros n Hn.   apply (@F.char_gt p256). cbv [p256]. Lia.lia. Qed.
-#[export] Instance coord_char_ge_12 : @Ring.char_ge coord eq 0%F 1%F F.opp F.add F.sub F.mul 12.
-Proof.  intros n Hn.   apply (@F.char_gt p256). cbv [p256]. Lia.lia. Qed.
-
 From Crypto.Curves Require Import Jacobian.
 Import Coq.Lists.List.
 
-Definition a : F p256 := F.opp (1+1+1).
-Definition b : F p256 := F.of_Z _ 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b.
-Definition point := @Jacobian.point coord eq F.zero F.add F.mul a b _.
-Definition add : point -> point -> point :=
-  @Jacobian.add coord eq F.zero F.one F.opp F.add F.sub F.mul F.inv F.div a b _ _ _.
+Notation affine_point := (@WeierstrassCurve.W.point coord eq F.add F.mul P256.a P256.b).
+Module affine_point.
+  Definition iszero (P : affine_point) := proj1_sig P = inr tt.
+End affine_point.
 
 Module Import point.
+  Notation point := (@Jacobian.point coord eq F.zero F.add F.mul P256.a P256.b _).
+  Notation add :=
+    (@Jacobian.add coord eq F.zero F.one F.opp F.add F.sub F.mul F.inv F.div P256.a P256.b _ _ _).
+  Coercion of_affine (p : affine_point) : point := Jacobian.of_affine p.
   Coercion to_bytes (p : point) :=
     let p := proj1_sig p in
     to_bytes (fst (fst p)) ++ to_bytes (snd (fst p)) ++ to_bytes (snd p).
@@ -193,14 +186,12 @@ Import PeanoNat Lia.
 Import Tactics.
 Require Import UniquePose.
 
+Require Import Crypto.Spec.WeierstrassCurve.
 Require Curves.Weierstrass.AffineProofs.
 From bedrock2 Require ToCString.
 From coqutil Require Macros.WithBaseName.
 
-Local Notation "xs $@ a" := (map.of_list_word_at a xs)
-  (at level 10, format "xs $@ a").
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (only parsing, at level 9, format "$ n").
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (only parsing, at level 50, format "p .+ n", left associativity).
+Import (notations) coqutil.Map.Memory.
 Local Unset Printing Coercions.
 
 Local Open Scope Z_scope.
@@ -248,6 +239,21 @@ Context {ext_spec : Semantics.ExtSpec}.
   fnspec! "p256_point_iszero" p_P / (P : point) ~> nz,
   { requires t m := m =*> P$@p_P;
     ensures t' m' := t' = t /\ m' = m /\ nz = word.broadcast (point.iszero P) }.
+
+#[export] Instance spec_of_p256_point_set_zero : spec_of "p256_point_set_zero" :=
+  fnspec! "p256_point_set_zero" p_out / out R,
+  { requires t m := m =* out$@p_out * R /\ length out = 96%nat;
+    ensures t' m' := t' = t /\ m' =* (Jacobian.of_affine W.zero)$@p_out * R }.
+
+#[export] Instance spec_of_p256_coord_opp : spec_of "p256_coord_opp" :=
+  fnspec! "p256_coord_opp" p / (x : coord) R,
+  { requires t m := m =* x$@p * R;
+    ensures t' m' := t' = t /\ let x_opp := F.opp x in m' =* x_opp$@p * R }.
+
+#[export] Instance spec_of_p256_coord_selectznz  : spec_of "p256_coord_select_znz" :=
+    fnspec! "p256_coord_select_znz" (p_out c p_z p_nz : word) / out (z nz : coord) R,
+    { requires t m := m =* (out$@p_out * R) /\ m =*> nz$@p_nz /\ m =*> z$@p_z /\ length out = length z;
+      ensures t' m' := t' = t /\ let out := if Z.eqb c 0 then z else nz in (out$@p_out * R)%sep m' }.
 
 #[export] Instance spec_of_p256_coord_add : spec_of "p256_coord_add" :=
   fnspec! "p256_coord_add" p_out p_x p_y / out (x y : coord) R,
@@ -315,14 +321,31 @@ Context {ext_spec : Semantics.ExtSpec}.
   }%sep.
 
 #[export] Instance spec_of_p256_point_add_affine_nz_nz_neq : spec_of "p256_point_add_affine_nz_nz_neq" :=
-  fnspec! "p256_point_add_affine_nz_nz_neq" p_x / (x : coord) ~> nz,
-  { requires t m := m =*> x$@p_x;
-    ensures t' m' := t' = t /\ m' = m /\ nz = word.of_Z 0 <-> x = F.zero }.
+  fnspec! "p256_point_add_affine_nz_nz_neq" p_out p_P p_Q / out (P : point) (Q : affine_point) R ~> ok,
+  { requires t m := m =* out$@p_out * P$@p_P * (Jacobian.of_affine Q)$@p_Q * R /\ length out = length P;
+    ensures t' m := t' = t /\ exists out,
+    m =* out$@p_out * P$@p_P * Q$@p_Q * R /\ length out = length P /\ (
+      ~ Jacobian.iszero P -> not (affine_point.iszero Q) ->
+        (ok <> word.of_Z 0 /\ exists pfPneqQ, out = (Jacobian.add_inequal_nz_nz P Q pfPneqQ : point)) \/
+        (ok = word.of_Z 0) /\ Jacobian.eq P Q)
+  }%sep.
+
+#[export] Instance spec_of_p256_point_add_affinenz_conditional_vartime_if_doubling : spec_of "p256_point_add_affinenz_conditional_vartime_if_doubling" :=
+  fnspec! "p256_point_add_affinenz_conditional_vartime_if_doubling" p_out p_P p_Q c / out (P : point) (Q : affine_point),
+  { requires t m := m =* out$@p_out * P$@p_P * (Jacobian.of_affine)Q$@p_Q /\ length out = length P /\ (affine_point.iszero Q -> c = word.of_Z 0);
+    ensures t' m := t' = t /\ exists out : point,
+      m =* out$@p_out * P$@p_P * Q$@p_Q /\ Jacobian.eq out (if word.eqb c (word.of_Z 0) then P else Jacobian.add P Q)
+  }%sep.
 
 #[export] Instance spec_of_br_cmov : spec_of "br_cmov" :=
   fnspec! "br_cmov" (c vnz vz : word) ~> r,
   { requires t m := c < 2;
     ensures t' m' := t' = t /\ m' = m /\ r = if Z.eqb c 0 then vz else vnz }.
+
+#[export] Instance spec_of_br_abs : spec_of "br_abs" :=
+  fnspec! "br_abs" (k sign_mask : word) ~> r,
+  { requires t m := word.unsigned sign_mask = if Z.ltb (word.signed k) 0 then Z.ones width else 0;
+    ensures t' m' := t' = t /\ m' = m /\ word.unsigned r = Z.abs (word.signed k) }.
 
 (* Internal intermediate functions for field arithmetic: *)
 
@@ -380,5 +403,3 @@ Module word.
     rewrite Z.land_comm, Z.land_ones, word.wrap_unsigned; trivial; blia.
   Qed.
 End word.
-
-Add Field Private_field : (Algebra.Field.field_theory_for_stdlib_tactic (T:=F p256)).

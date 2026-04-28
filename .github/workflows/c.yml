@@ -17,7 +17,7 @@ jobs:
       cancel-in-progress: true
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
     - name: install gcc
@@ -31,7 +31,7 @@ jobs:
     - name: GCC Problem Matcher
       uses: ammaraskar/gcc-problem-matcher@0.3.0
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       id: go
     - name: make only-test-c-files CC=gcc
       run: make only-test-c-files CC=gcc EXTERNAL_DEPENDENCIES=1

@@ -25,8 +25,8 @@ jobs:
     steps:
     - name: Install system dependencies
       run: |
-        pacman --noconfirm -Syu base-devel git make python3 which jq ghc ghc-static time diffutils coq ocaml-zarith --needed
-    - uses: actions/checkout@v4
+        pacman --noconfirm -Syu base-devel git make python3 which jq ghc ghc-static time diffutils rocq rocq-stdlib ocaml-zarith --needed
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
     - name: work around coq issue 15663
@@ -47,7 +47,7 @@ jobs:
     - run: tar -czvf generated-files.tgz fiat-*/
       if: failure()
     - name: upload generated files
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: generated-files-archlinux
         path: generated-files.tgz
@@ -55,7 +55,7 @@ jobs:
     - run: find . -name "*.timing" | xargs tar -czvf timing-files.tgz
       if: failure()
     - name: upload generated timing files
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: timing-files-archlinux
         path: timing-files.tgz
@@ -67,31 +67,31 @@ jobs:
     #- name: install-standalone-js-of-ocaml
     #  run: etc/ci/github-actions-make.sh install-standalone-js-of-ocaml
     - name: upload standalone files
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: standalone-archlinux
         path: dist/fiat_crypto
     #- name: upload standalone js files
-    #  uses: actions/upload-artifact@v4
+    #  uses: actions/upload-artifact@v7
     #  with:
     #    name: standalone-html-archlinux
     #    path: fiat-html
     - name: upload OCaml files
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ExtractionOCaml-archlinux
         path: src/ExtractionOCaml
       if: always ()
     #- name: upload js_of_ocaml files
-    #  uses: actions/upload-artifact@v4
+    #  uses: actions/upload-artifact@v7
     #  with:
     #    name: ExtractionJsOfOCaml-archlinux
     #    path: src/ExtractionJsOfOCaml
     #  if: always ()
     - name: standalone-haskell
-      run: etc/ci/github-actions-make.sh -j1 standalone-haskell GHCFLAGS='+RTS -M7G -RTS'
+      run: etc/ci/github-actions-make.sh -j1 standalone-haskell GHCFLAGS='+RTS -M9G -RTS'
     - name: upload Haskell files
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ExtractionHaskell-archlinux
         path: src/ExtractionHaskell
@@ -117,9 +117,9 @@ jobs:
     - name: Install system dependencies
       run: |
         pacman --noconfirm -Syu git --needed
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Download standalone archlinux
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: standalone-archlinux
         path: dist/
@@ -142,12 +142,12 @@ jobs:
 #    permissions:
 #      contents: write  # IMPORTANT: mandatory for making GitHub Releases
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0 # Fetch all history for all tags and branches
         tags: true     # Fetch all tags as well, `fetch-depth: 0` might be sufficient depending on Git version
     - name: Download standalone archlinux
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: standalone-archlinux
         path: dist/

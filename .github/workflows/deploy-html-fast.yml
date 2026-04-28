@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Copy files from gh-pages
       run: |
         git clone https://github.com/mit-plv/fiat-crypto.git --branch gh-pages --single-branch --depth 1 fiat-crypto-gh-pages
@@ -22,7 +22,7 @@ jobs:
     - name: backup .gitignore
       run: mv .gitignore{,.bak}
     - name: Deploy js_of_ocaml 🚀 ${{ ( github.ref != 'refs/heads/master' && '(dry run)' ) || '' }}
-      uses: JamesIves/github-pages-deploy-action@v4.7.2
+      uses: JamesIves/github-pages-deploy-action@v4.8.0
       with:
         branch: gh-pages # The branch the action should deploy to.
         folder: fiat-html # The folder the action should deploy.
