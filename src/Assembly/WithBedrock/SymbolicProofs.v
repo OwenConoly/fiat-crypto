@@ -736,8 +736,26 @@ Lemma mod_pow2_add_low (a c : Z) (k : nat) :
   0 <= a < 2^8 ->
   (a + c * 2^8) mod 2^(8 + 8 * Z.of_nat k) =
   a + (c mod 2^(8 * Z.of_nat k)) * 2^8.
-Proof. 
-Admitted.
+Proof.
+  intros Ha.
+  rewrite Z.pow_add_r by lia.
+  rewrite Z.mul_comm with (n := 2^8) (m := 2^(8 * Z.of_nat k)).
+  (* now goal is (a + c * 2^8) mod (2^(8*k) * 2^8) = a + c mod 2^(8*k) * 2^8 *)
+  apply (Z.mod_small a (2^8)) in Ha.
+  assert (H8 : 0 < 2 ^ 8) by (apply Z.pow_pos_nonneg; lia).
+  assert (Hk : 0 < 2 ^ (8 * Z.of_nat k)) by (apply Z.pow_pos_nonneg; lia).
+  pose proof (Z.mod_pos_bound a (2 ^ 8) H8) as [Ha1 Ha2].
+  rewrite Ha in Ha1, Ha2.
+  pose proof (Z.mod_pos_bound c (2 ^ (8 * Z.of_nat k)) Hk) as [Hc1 Hc2].
+  rewrite (Z_div_mod_eq_full c (2 ^ (8 * Z.of_nat k))) at 1.
+  replace ((2 ^ (8 * Z.of_nat k) * (c / 2 ^ (8 * Z.of_nat k)) +
+            c mod 2 ^ (8 * Z.of_nat k)) * 2 ^ 8)
+    with (c mod 2 ^ (8 * Z.of_nat k) * 2 ^ 8 +
+          c / 2 ^ (8 * Z.of_nat k) * (2 ^ (8 * Z.of_nat k) * 2 ^ 8))
+    by ring.
+  rewrite Z.add_assoc, Z_mod_plus_full.
+  apply Z.mod_small. nia.
+Qed.
 
 Lemma le_combine_cons_add b bs :
   le_combine (b :: bs) = Byte.byte.unsigned b + le_combine bs * 2^8.
@@ -1251,12 +1269,6 @@ Proof using Type.
       rewrite Hwr. reflexivity. }
     rewrite Hw. exact Hb.
 Qed.
-
-(* Lemma widest_reg_size_at_index r wr :
-  nth_error widest_registers (N.to_nat (reg_index r)) = Some wr ->
-  reg_size wr = widest_reg_size_of r.
-Proof.
-Admitted. *)
  
 (* works because Symbolic.set_reg just overwrites the reg slot. so the fun _ => v can replace bits_set_slice logic *)
 Lemma R_regs_set_reg d sr mr (HR : R_regs d sr mr) r (i : idx) v
@@ -1370,7 +1382,7 @@ Lemma R_SetRegOverwrite {opts : symbolic_options_computed_opt} {descr:descriptio
   (Hwidest : reg_size r = widest_reg_size_of r)
   (H : Symbolic.SetRegOverwrite r i s = Success (_tt, s'))
   v (Hv : eval s i v)
-  : exists m', update_reg_with m (fun rs => set_reg rs r v) = m'
+  : exists m', Some (update_reg_with m (fun rs => set_reg rs r v)) = Some m'
     /\ R s' m' /\ s :< s'.
 Proof using Type.
   cbv [SetRegOverwrite index_and_shift_and_bitcount_of_reg] in H.
@@ -1389,7 +1401,7 @@ Lemma R_SetRegSlice {opts : symbolic_options_computed_opt} {descr:description}
   s m (HR : R s m) r i _tt s'
   (H : Symbolic.SetRegSlice r i s = Success (_tt, s'))
   v (Hv : eval s i v)
-  : exists m', update_reg_with m (fun rs => set_reg rs r v) = m'
+  : exists m', Some (update_reg_with m (fun rs => set_reg rs r v)) = Some m'
     /\ R s' m' /\ s :< s'.
 Proof using Type.
   cbv [SetRegSlice index_and_shift_and_bitcount_of_reg] in H.
@@ -1413,7 +1425,7 @@ Lemma R_SetReg {opts : symbolic_options_computed_opt} {descr:description}
   s m (HR : R s  m) r i _tt s'
   (H : Symbolic.SetReg r i s = Success (_tt, s'))
   v (Hv : eval s i v)
-  : exists m', update_reg_with m (fun rs => set_reg rs r v) = m'
+  : exists m', Some (update_reg_with m (fun rs => set_reg rs r v)) = Some m'
     /\ R s' m' /\ s :< s'.
 Proof. 
   destruct ((reg_offset r =? 0)%N && (reg_size r =? widest_reg_size_of r)%N)%bool eqn:Hb.
@@ -1421,132 +1433,11 @@ Proof.
   unfold SetReg, index_and_shift_and_bitcount_of_reg in H. 
   rewrite Hoffset, Hwidest in H. simpl in H.
   apply Neqb_ok in Hoffset, Hwidest.
-  eapply R_SetRegOverwrite in H; eauto.
+  eapply R_SetRegOverwrite in H; eauto. 
   - unfold SetReg, index_and_shift_and_bitcount_of_reg in H. 
     rewrite Hb in H.
     eapply R_SetRegSlice in H; eauto.
 Qed.
-
-Lemma reg_size_offset_bounded (r : REG) :                                                                          
-  (reg_size r + reg_offset r <= widest_reg_size_of r)%N.
-Proof. destruct r as [sr | vr]; [destruct sr | destruct vr]; vm_compute; intros; discriminate. Qed.   
-  
-(* 2. Partial register write *)                     
-Lemma R_SetReg_partial {opts : symbolic_options_computed_opt} {descr:description}
-  s m (HR : R s m) r i _tt s'                                                  
-  (Hpartial : ((reg_offset r =? 0)%N && (reg_size r =? widest_reg_size_of r)%N)%bool = false)                      
-  (H : Symbolic.SetReg r i s = Success (_tt, s'))                                                                  
-  v (Hv : eval s i v)                   
-  : exists m', Some (update_reg_with m (fun rs => set_reg rs r v)) = Some m'                                       
-  /\ R s' m' /\ s :< s'.
-Proof using Type.                                                                                    
-  eexists. repeat split.
-  { (* R s' m' *)                                                                                                  
-    unfold SetReg in H. unfold set_reg, index_and_shift_and_bitcount_of_reg in *.                                  
-    rewrite Hpartial in H.                                                                                         
-    (* H is now: (old <- GetRegFull rn; v_new <- App (set_slice lo sz, [old; i]); SetRegFull rn v_new) s *)        
-                                            
-    (* Process GetRegFull: reads old register, state unchanged *)                                                  
-    repeat step_symex.
-    cbn [fst snd] in HSv0.
-    
-    cbv [GetRegFull some_or] in HSold.                                                                                 
-    pose proof (get_reg_R s _ HR (reg_index r)) as Hr_old.                                                             
-    destruct (Symbolic.get_reg (symbolic_reg_state s) (reg_index r)) eqn:Hgreg;                                        
-      [| discriminate HSold].               
-    inversion HSold; subst s0. clear HSold.
-    specialize (Hr_old _ eq_refl). destruct Hr_old as (old_val & Heval_old & Hold_eq).                                 
-                                            
-    (* App_R on set_slice *)                                                                                           
-    eapply App_R in HSv0 as (HRs1 & Hsub1 & Heval_v0).
-    2: { exact HR. }
-    2: { subst old. repeat (eauto || econstructor). }                                                               
-                                                                                                                        
-    (* SetRegFull *)                        
-    cbn [fst snd] in H. cbv [SetRegFull] in H.                                                                         
-    inversion_ErrorT; Prod.inversion_prod; subst.        
-    destruct s1 as [d1 sr1 sf1 sm1].                                                                                   
-    destruct HRs1 as (Hok1 & Hregs1 & Hflags1 & Hmem1).
-    cbv [R update_reg_with Symbolic.update_reg_with]; cbn.                                                             
-    split; [| split; [| split]]; eauto.         
-                                                                                                                      
-    (* R_regs *)    
-    unfold R_regs, Symbolic.set_reg.                                                                                   
-    unshelve erewrite 2Tuple.from_list_default_eq, 2Tuple.to_list_from_list;
-      try solve [rewrite ?Crypto.Util.ListUtil.length_set_nth,                                                         
-                ?Crypto.Util.ListUtil.length_update_nth,
-                ?Tuple.length_to_list; trivial].
-    unfold ListUtil.set_nth. rewrite combine_update_nth.                                                               
-    2: repeat rewrite Tuple.length_to_list; reflexivity.
-    eapply Forall2_update_nth_r.                                                                                       
-    { exact Hregs1. }                           
-    intros x_old v_old Hw Hy HR_old.                                                                                   
-    destruct v_old as [sym_old conc_old].
-    cbv [R_reg] in *. destruct HR_old as [_ Hbits_old].                                                                
-    rewrite nth_error_map in Hw.                
-    destruct (nth_error widest_registers (N.to_nat (reg_index r))) as [wr|] eqn:Hwr;                                   
-      [cbn in Hw; inversion Hw; subst x_old | discriminate Hw].
-    assert (Hwidth : widest_reg_size_of r = reg_size wr).                                                              
-    { unfold widest_reg_size_of, widest_register_of_index, widest_register_of_index_opt.
-      replace (List.map ( @snd _ _) wide_reg_index_pairs) with widest_registers                                         
-        by reflexivity.                                                                                                
-      rewrite Hwr. reflexivity. }
-    split.                                                                                                             
-    - intros i0 Hi0; inversion Hi0; subst. simpl in Heval_v0.
-      replace conc_old with (Tuple.nth_default 0 (N.to_nat (reg_index r)) (machine_reg_state m)).
-      2: { rewrite nth_error_combine in Hy.
-        destruct (nth_error (Tuple.to_list 100 sr1) (N.to_nat (reg_index r))) eqn:Hsr;
-          [| discriminate Hy].
-        destruct (nth_error (Tuple.to_list 100 (machine_reg_state m)) (N.to_nat (reg_index r))) eqn:Hm;
-          [| discriminate Hy].                  
-        inversion Hy; subst conc_old.               
-        rewrite <- Tuple.nth_default_to_list. unfold nth_default. rewrite Hm. reflexivity.  
-      } 
-      cbv [Tuple.nth_default] in Heval_v0. exact Heval_v0.
-    -
-      pose proof (reg_size_offset_bounded r).     
-      rewrite Hwidth in *.                    
-      rewrite Hbits_old.
-      bitblast.Z.bitblast.     
-  }
-  {
-    unfold SetReg, index_and_shift_and_bitcount_of_reg in H.
-    rewrite Hpartial in H.                      
-    repeat step_symex.
-    cbv [fst snd] in HSv0.
-    cbv [fst snd SetRegFull] in H.
-    pose proof (get_reg_R s _ HR (reg_index r)) as Hr_old.
-    cbv [GetRegFull some_or] in HSold.
-    eapply App_R in HSv0.
-    {
-      inversion_ErrorT; Prod.inversion_prod; subst.
-      destruct HSv0 as [_ [Hsub _]].
-      destruct (Symbolic.get_reg (symbolic_reg_state s) (reg_index r));                                                  
-      [| discriminate HSold].                                                                                          
-      inversion HSold; subst s0.
-      unfold Symbolic.update_reg_with; simpl.                                                                            
-      exact Hsub. 
-    }
-    {
-      destruct (Symbolic.get_reg (symbolic_reg_state s) (reg_index r)). 
-      inversion HSold. rewrite <- H2. exact HR.
-      discriminate HSold.
-    }
-    {
-      destruct (Symbolic.get_reg (symbolic_reg_state s) (reg_index r)) eqn:Hgreg;
-        [| discriminate HSold].                                                                                          
-      (* pose proof (get_reg_R s _ HR (reg_index r)) as Hr_old. *)
-      inversion HSold. subst s0. 
-      specialize (Hr_old _ eq_refl). destruct Hr_old as (old_val & Heval_old & Hold_eq).  
-      subst old.                                                                                       
-      eapply ENod with (args' := [old_val; v]).                                                                          
-      - constructor; [exact Heval_old | constructor; [exact Hv | constructor]].                                          
-      - cbn [interp_op]. f_equal. rewrite <- Hold_eq. reflexivity.
-    }           
-  }
-Qed.
-
-
 
 Lemma DenoteAddressLandOnes sa m a addr :
   (DenoteAddress sa m a = addr) ->
@@ -1557,93 +1448,213 @@ Proof.
   intros. subst. unfold DenoteAddress. apply H.
 Qed.
 
-Lemma le_split_app n1 n2 v :                   
-  le_split (n1 + n2) v = le_split n1 v ++ le_split n2 (Z.shiftr v (8 * Z.of_nat n1)).                              
-Proof.                                                                                                             
-  rewrite <- (firstn_skipn n1 (le_split (n1 + n2) v)).                                                             
-rewrite skipn_le_split'. Admitted.
-  (* rewrite List.firstn_le_split.                                                                                    
-  rewrite Nat.min_l by lia. reflexivity. *)
-(* Qed. *)
+(* ============================================================ *)
+(* LEVEL 0: byte-level store composition lemmas                 *)
+(* ============================================================ *)
 
+Lemma le_split_app n1 n2 v :
+  le_split (n1 + n2) v = le_split n1 v ++ le_split n2 (Z.shiftr v (8 * Z.of_nat n1)).
+Admitted.
+(* PROOF: induction on n1.
+   base: le_split 0 v = [], shiftr by 0, app_nil_l.
+   step: unfold le_split at LHS, cons of_Z, f_equal,
+         rewrite IH, shiftr_shiftr, replace (8+8*n1) with (8*S n1). *)
 
-Lemma store_bytes_app (m: mem_state) a bs1 bs2 m1 m2 :                                     
-  store_bytes m a bs1 = Some m1 ->                                                                                 
-  store_bytes m1 (word.add a (word.of_Z (Z.of_nat (length bs1)))) bs2 = Some m2 ->                                
-  store_bytes m a (bs1 ++ bs2) = Some m2. 
-Proof. Admitted.
+Lemma store_bytes_app (m: mem_state) a bs1 bs2 m1 m2 :
+  store_bytes m a bs1 = Some m1 ->
+  store_bytes m1 (word.add a (word.of_Z (Z.of_nat (length bs1)))) bs2 = Some m2 ->
+  store_bytes m a (bs1 ++ bs2) = Some m2.
+Admitted.
+(* PROOF: unfold store_bytes in *.
+   The load_bytes guard for (bs1++bs2) holds because:
+     - load_bytes m a (length bs1) succeeds (from H1's guard),
+     - load_bytes m1 (a+len bs1) (length bs2) succeeds (from H2's guard),
+     - unchecked_store_bytes only adds mappings, so the second guard
+       still holds on m1.
+   Then unchecked_store_bytes m a (bs1++bs2) =
+     map.putmany m (map.of_list_word_at a (bs1++bs2)).
+   Split of_list_word_at over (++), reassociate putmany,
+   match the two-step store. *)
 
+Lemma le_split_mod n v :
+  le_split n (v mod 2 ^ (8 * Z.of_nat n)) = le_split n v.
+Admitted.
+(* PROOF: induction on n; each byte is (v mod 256), and
+   (v mod 2^(8k)) mod 256 = v mod 256 when k >= 1.
+   Step uses shiftr_mod_mod identity. *)
 
-(* n1 n2 are in bytes *)
-(* setting lower n1 bytes to lower part of v gives state m1 *)
-(* setting upper n2 bytes to upper shifted part of v gives state m2 *)
-(* then setting all bytes to v simultaneously gives m2. *)
-Lemma SetMem_compose m addr n1 n2 v m1 m2 :                                       
-  SetMem m addr n1 (Z.land v (Z.ones (8 * Z.of_nat n1))) = Some m1 ->                                              
-  SetMem m1 (addr + Z.of_nat n1) n2 (Z.shiftr v (8 * Z.of_nat n1)) = Some m2 ->                                    
-  SetMem m addr (n1 + n2) v = Some m2.                                                                             
+(* ============================================================ *)
+(* LEVEL 1: SetMem composition                                  *)
+(* ============================================================ *)
+
+(* Writing lower n1 bytes, then upper n2 bytes, equals writing all (n1+n2) bytes. *)
+Lemma SetMem_compose m addr n1 n2 v m1 m2 :
+  SetMem m addr n1 (Z.land v (Z.ones (8 * Z.of_nat n1))) = Some m1 ->
+  SetMem m1 (addr + Z.of_nat n1) n2 (Z.shiftr v (8 * Z.of_nat n1)) = Some m2 ->
+  SetMem m addr (n1 + n2) v = Some m2.
 Proof.
-  cbv [SetMem set_mem Crypto.Util.Option.bind].                                                                    
-  intros H1 H2.                                                                                                    
-  destruct (store_bytes _ _ (le_split n1 _)) eqn:Hs1 in H1; [| discriminate].                                      
-  inversion H1; subst m1; clear H1.                                                                                
-  destruct (store_bytes _ _ (le_split n2 _)) eqn:Hs2 in H2; [| discriminate].                                      
-  inversion H2; subst m2; clear H2.                                                                                
-  (* Need: store_bytes m (word.of_Z addr) (le_split (n1+n2) v) = Some m0 *)
-  rewrite le_split_app. rewrite Z.land_ones in Hs1 by lia.
+  cbv [SetMem set_mem Crypto.Util.Option.bind].
+  intros H1 H2.
+  destruct (store_bytes _ _ (le_split n1 _)) eqn:Hs1 in H1; [| discriminate].
+  inversion H1; subst m1; clear H1.
+  destruct (store_bytes _ _ (le_split n2 _)) eqn:Hs2 in H2; [| discriminate].
+  inversion H2; subst m2; clear H2.
+  rewrite le_split_app.
+  rewrite Z.land_ones in Hs1 by lia.
   erewrite store_bytes_app.
-  2 : { rewrite le_split_mod. replace (Z.of_nat n1 * 8) with (8 * Z.of_nat n1) by lia. exact Hs1. }
-  2 : { rewrite length_le_split. rewrite <- word.ring_morph_add. exact Hs2. }
-  reflexivity.
+  - reflexivity.
+  - rewrite le_split_mod in Hs1. exact Hs1.
+  - rewrite length_le_split. rewrite <- word.ring_morph_add. exact Hs2.
 Qed.
 
+Lemma SetMem_0 m addr v : SetMem m addr 0 v = Some m.
+Admitted.
+(* PROOF: cbv [SetMem set_mem store_bytes Crypto.Util.Option.bind].
+   le_split 0 v = []. footprint _ 0 = []. option_all [] = Some [].
+   unchecked_store_bytes m a [] = map.putmany m map.empty = m.
+   update_mem_with with identity. *)
 
+Lemma byte_wrap_bounds w n
+	(H : Z.of_nat n > 0) :
+	Byte.byte.wrap (w mod 2^ (8 * Z.of_nat n)) = Byte.byte.wrap w.
+Proof. 
+	unfold Byte.byte.wrap. eapply Z.mod_mod_divide.
+	 rewrite Z.pow_mul_r; [apply Zpow_facts.Zpower_divide; lia | lia | lia]. 
+Qed.
+
+Lemma byte_of_Z_bounds w n (H : Z.of_nat n > 0) :
+      Byte.byte.of_Z (Z.land w (Z.ones (8 * Z.of_nat n))) = Byte.byte.of_Z w.
+  Proof.
+		assert (forall a b, Byte.byte.wrap a = Byte.byte.wrap b -> Byte.byte.of_Z a = Byte.byte.of_Z b) as byte_wrap.
+		{
+		intros a b H2. unfold Byte.byte.of_Z.
+    generalize (Byte.byte.Byte_of_N_of_mod_not_None a).
+    generalize (Byte.byte.Byte_of_N_of_mod_not_None b).
+    rewrite H2.
+    intros f1 f2.
+    destruct (Byte.of_N (Z.to_N (Byte.byte.wrap b))).
+    - reflexivity.
+    - exfalso. exact (f1 eq_refl).
+		}
+    rewrite Z.land_ones by lia.
+    apply byte_wrap.
+    apply byte_wrap_bounds. lia.
+  Qed.
+
+Lemma le_split_bounds n v :
+			le_split n (Z.land v (Z.ones (8 * Z.of_nat n))) = le_split n v.
+Proof.
+	revert v; induction n; intros v.
+	{ reflexivity. }
+	{ change (le_split (S n) ?x) with (Byte.byte.of_Z x :: le_split n (Z.shiftr x 8)).
+		rewrite byte_of_Z_bounds. 
+	f_equal. rewrite Z.shiftr_land by lia.
+  replace (Z.shiftr (Z.ones (8 * Z.of_nat (S n))) 8) with (Z.ones (8 * Z.of_nat n)).
+	{ apply IHn. }
+	{ bitblast.Z.bitblast. }
+	{ lia. }
+	}
+Qed.
+
+Lemma SetMem_bounds m addr nbytes v : 
+			SetMem m addr nbytes (Z.land v (Z.ones (8 * Z.of_nat nbytes))) = SetMem m addr nbytes v.
+Proof. 
+			 intros. unfold SetMem, Crypto.Util.Option.bind in *. destruct (set_mem m addr nbytes v) eqn:H;
+			 unfold set_mem in *; rewrite le_split_bounds; rewrite H; reflexivity. 
+Qed.
 
 Lemma R_Store_of_idx {opts : symbolic_options_computed_opt} {descr:description}
   {sa : AddressSize} (Hsa : sa = 64%N)
   n s m (HR : R s m)
   (addr : idx) va (Ha : eval s addr va)
   (i : idx) v (Hv : eval s i v)
-  (Hv_bounded : v = Z.land v (Z.ones (64 * Z.of_nat n)))
   _tt s' (H : Store_of_idx n addr i s = Success (_tt, s'))
   : exists m', SetMem m va (8 * n)%nat v = Some m' /\ R s' m' /\ s :< s'.
-(* PROOF: induction on n.
-     base (n=0): cbn [Store_of_idx] in H gives s' = s and `_tt`; SetMem _ _ 0 v
-                 reduces to Some m by le_split_0/store_bytes_nil reasoning.
-     step (S n'): cbn [Store_of_idx] in H. Threads through:
-       - IH at n' gives m1 with SetMem m va (8*n') (low bits of v) = Some m1.
-       - App_R for the offset (const (8*n')) and (add sa).
-       - App_R for the slice (64*n', 64) extracting the next chunk.
-       - Store64_R yields m2 from storing the chunk at va + 8*n'.
-       - SetMem_compose (line 1387) glues m1 -> m2 into a single SetMem of
-         8*(S n') bytes at va.
-       - SetMem_addr_mod (line 727) handles the addr-mod-2^64 normalization
-         introduced by symbolic add wrapping.
-   Uses ONLY: recursive R_Store_of_idx, Store64_R, App_R, SetMem_compose,
-              SetMem_addr_mod. One unfold of Store_of_idx per inductive step. *)
-Admitted.
+Proof using Type.
+  revert s m HR addr va Ha i v Hv _tt s' H.
+  induction n as [|n' IH]; intros.
+  { (* base: Store_of_idx 0 = ret tt *)
+    cbn [Store_of_idx] in H.
+    inversion_ErrorT; Prod.inversion_prod; subst.
+		unfold ret in H; inversion H; subst.
+    exists m. split; [apply SetMem_0 | split; eauto].
+  }
+  { (* step: recursive Store_of_idx n' + App offset + App addr_k + App chunk + Store64 *)
+    cbn [Store_of_idx] in H.
+    repeat (cbn [fst snd] in * || step_symex || Tactics.destruct_one_match_hyp
+            || inversion_ErrorT || Prod.inversion_prod || subst).
+    (* IH: store the low n'*64 bits *)
+    assert (Hv_low : Z.land v (Z.ones (64 * Z.of_nat n')) =
+                     Z.land (Z.land v (Z.ones (64 * Z.of_nat n')))
+                            (Z.ones (64 * Z.of_nat n'))).
+    { bitblast.Z.bitblast. }
 
+    eapply IH in HSx as (m1 & Hset1 & HR1 & Hsub1);
+      try eassumption; try exact Hv_low.
+    (* App_R for offset const (8 * n') *)
+    eapply App_R in HSoffset as (HR2 & Hsub2 & Heval_offset); [| exact HR1 | repeat (econstructor; eauto)].
+    (* App_R for addr_k = addr + offset *)
+    eapply App_R in HSaddr_k as (HR3 & Hsub3 & Heval_addr_k); [|exact HR2 |  repeat (econstructor; eauto)].
+    cbn [fold_right] in Heval_addr_k. rewrite Z.add_0_r in Heval_addr_k.
+
+    (* App_R for chunk = slice (64*n') 64 [i] *)
+    assert (Hchunk_val : Z.land (Z.shiftr v (Z.of_N (64 * N.of_nat n'))) (Z.ones (Z.of_N 64))
+                       = Z.land (Z.shiftr v (64 * Z.of_nat n')) (Z.ones 64)).
+    { replace (Z.of_N (64 * N.of_nat n')) with (64 * Z.of_nat n') by lia.
+      replace (Z.of_N 64) with 64 by lia. reflexivity. }
+    eapply App_R in HSchunk as (HR4 & Hsub4 & Heval_chunk); [|exact HR3 |  repeat (econstructor; eauto)].
+
+    (* Store64_R for the chunk at addr + 8*n' *)
+    set (chunk_val := Z.land (Z.shiftr v (64 * Z.of_nat n')) (Z.ones 64)).
+    assert (Hchunk_bounded : chunk_val = Z.land chunk_val (Z.ones 64)). { unfold chunk_val. bitblast.Z.bitblast. }
+    eapply Store64_R with
+      (v' := Z.shiftr v (8 * Z.of_nat (8 * n')))
+      (va := Z.land (va + 8 * Z.of_nat n') (Z.ones 64))
+      in H; try eassumption; try bitblast.Z.bitblast.
+		2: { apply Hsub4. replace (Z.ones (Z.of_N 64)) with (Z.ones 64) by eauto. exact Heval_addr_k. }
+
+    destruct H as (m2 & Hset2 & HR5 & Hsub5).
+    (* Compose the two SetMem operations *)
+    rewrite SetMem_addr_mod in Hset2.
+    exists m2. split; [|split; [exact HR5|]].
+    { (* SetMem m va (8 * S n') v = Some m2 *)
+      replace (8 * S n')%nat with (8 * n' + 8)%nat by lia.
+      eapply SetMem_compose.
+      { rewrite SetMem_bounds. exact Hset1. }
+      { replace (Z.of_nat (8 * n')) with (8 * Z.of_nat n') by lia.
+        replace (8 * (8 * Z.of_nat n')) with (8 * Z.of_nat (8 * n')) by lia.
+        exact Hset2. }
+    }
+    { solve_subsumed. } 
+  }
+Qed.
+
+(* 128-bit store corollary *)
 Corollary R_Store128_of_idx {opts : symbolic_options_computed_opt} {descr:description}
   {sa : AddressSize} (Hsa : sa = 64%N)
   s m (HR : R s m) (addr : idx) va (Ha : eval s addr va)
   (i : idx) v (Hv : eval s i v)
-  (Hv_bounded : v = Z.land v (Z.ones 128))
   _tt s' (H : Store128_of_idx addr i s = Success (_tt, s'))
   : exists m', SetMem m va 16%nat v = Some m' /\ R s' m' /\ s :< s'.
-(* PROOF: cbv [Store128_of_idx] in H; eapply R_Store_of_idx with (n := 2%nat); eauto. *)
-Admitted.
+Proof using Type.
+  cbv [Store128_of_idx] in H. eapply R_Store_of_idx with (n := 2%nat); eauto.
+Qed.
 
+(* 256-bit store corollary *)
 Corollary R_Store256_of_idx {opts : symbolic_options_computed_opt} {descr:description}
   {sa : AddressSize} (Hsa : sa = 64%N)
   s m (HR : R s m) (addr : idx) va (Ha : eval s addr va)
   (i : idx) v (Hv : eval s i v)
-  (Hv_bounded : v = Z.land v (Z.ones 256))
   _tt s' (H : Store256_of_idx addr i s = Success (_tt, s'))
   : exists m', SetMem m va 32%nat v = Some m' /\ R s' m' /\ s :< s'.
-(* PROOF: cbv [Store256_of_idx] in H; eapply R_Store_of_idx with (n := 4%nat); eauto. *)
-Admitted.
+Proof using Type.
+  cbv [Store256_of_idx] in H. eapply R_Store_of_idx with (n := 4%nat); eauto.
+Qed.
 
-
+(* ============================================================ *)
+(* LEVEL 3: R_Store — top-level dispatch by operand size        *)
+(* Mirrors Load_R structure.                                    *)
+(* ============================================================ *)
 
 Lemma R_Store {opts : symbolic_options_computed_opt} {descr:description}
   {sz : OperationSize} {sa : AddressSize} (Hsa : sa = 64%N)
@@ -1652,126 +1663,67 @@ Lemma R_Store {opts : symbolic_options_computed_opt} {descr:description}
   v (Hv : eval s i v)
   : exists m', SetMem m (DenoteAddress sa m a) (N.to_nat (operand_size a sz / 8)) v = Some m'
               /\ R s' m' /\ s :< s'.
-(* PROOF: cbv [Store] in H. Use Address_R for the address idx. Case on
-   operand_size a sz:
-     8 or 64 -> Load64_R for old value, App_R for slice/set_slice merge,
-                Store64_R for the actual write; uses store8 (line 953) for
-                the 8-bit byte-aligned case.
-     128     -> R_Store128_of_idx.
-     256     -> R_Store256_of_idx.
-     other   -> err contradiction.
-   Subsumes the legacy R_SetMem below; one unfold (Store), one composer
-   call per branch. *)
-Admitted.
-
-
-(* DEPRECATED: superseded by R_Store (level-3) + R_Store_of_idx (level-2) above.
-   Kept temporarily for the partial proof body of the 8/64-bit case, which
-   should be migrated into the new R_Store proof. No remaining callers. *)
-(* Lemma R_SetMem {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m) (sz : OperationSize) (sa : AddressSize)
-  a i _tt s'
-  (Hsa : sa = 64%N)
-  (H : Symbolic.Store a i s = Success (_tt, s'))
-  v (Hv : eval s i v)
-  : exists m', SetMem m (DenoteAddress sa m a) (N.to_nat (operand_size a sz / 8)) v = Some m'                      
-  /\ R s' m' /\ s :< s'.  
-  Proof using Type.
-    progress cbv [Store] in *.
-    rewrite Hsa in *. clear sa Hsa.
-    (* case split on operand_size *)
-    destruct_one_match_hyp; cbv [err] in *; [| destruct_one_match_hyp; [| destruct_one_match_hyp]];                  
-      try inversion_ErrorT.
-    { (* 8/64 bit store *)
-      repeat (step_symex; cbn [fst snd] in * ).
-      eapply Load64_R in HSold; eauto;                                                                       
-      repeat (subst; destruct_head'_ex; destruct_head'_and).                                                       
-      repeat (step_symex; cbn [fst snd] in * ).                                                                       
-      { repeat (eauto || econstructor). }
-      { repeat (eauto || econstructor). }                                                                            
-      rewrite !Z.shiftl_0_r, ?Z.shiftr_0_r, <-Z.land_assoc, Z.land_diag in *.
-      case E as [E|E]; rewrite E in *; simpl Z.of_N in *.                                                            
-      + (* 8-bit *)                                                                                                  
-      eapply Store64_R with (v':=Z.lor (Z.land v (Z.ones 8)) (Z.ldiff x (Z.ones 8))) in H;
-      try eassumption; eauto with nocore; try solve [rewrite H5; bitblast.Z.bitblast].                           
-      destruct_head'_ex; destruct_head'_and.
-      cbv [SetMem Crypto.Util.Option.bind update_mem_with] in *;                                                   
-      destruct set_mem eqn:? in *; Option.inversion_option; subst.                                               
-      erewrite store8; eauto 9.                                                                                    
-      + (* 64-bit *)                                                                                                 
-      eapply Store64_R with (v':=v) in H;                                                                          
-      try eassumption; eauto with nocore; try solve [rewrite H5; bitblast.Z.bitblast].
-      destruct_head'_ex; destruct_head'_and. setoid_rewrite H. eauto 9.                                            
+Proof. 
+  cbv [Store] in H.
+  step_symex; cbv [fst snd] in *.
+  step_Address. rename x into va.
+  repeat (destruct_one_match_hyp; try discriminate H).
+  repeat step_symex; cbv [fst snd] in *.
+  { (* 8 and 64 bit cases *)
+    eapply Load64_R in HSold; [|eassumption|eassumption].
+    destruct HSold as (Hs1 & old_val & Heval_old & Hget_old & Hbound_old); subst.
+    step_App; [repeat (econstructor; eauto)|].
+    step_App; [repeat (econstructor; eauto)|].
+    rewrite !Z.shiftl_0_r, !Z.shiftr_0_r in *.
+    destruct E as [E|E]; rewrite E in *.
+    { (* 8-bit store: read-modify-write *)
+      eapply Store64_R with (v' := Z.lor (Z.land v (Z.ones 8)) (Z.ldiff old_val (Z.ones 8))) in H;
+        try eassumption; eauto with nocore;
+        try solve [rewrite Hbound_old; bitblast.Z.bitblast].
+      destruct H as (m' & Hset & HR' & Hsub').
+      cbv [SetMem Crypto.Util.Option.bind update_mem_with] in *.
+      destruct set_mem eqn:? in *; Option.inversion_option; subst.
+      erewrite store8; eauto 9.
     }
-    { Admitted. (* 128-bit store *)                                                                                            
-      (* Step through: App(slice 0 64), App(slice 64 64), Store64, App(const 8), App(add), Store64 *)                
-      repeat (step_symex; cbn [fst snd] in * ).
-      { repeat (eauto || econstructor). }  (* slice 0 64 *)                                        
-      { repeat (eauto || econstructor). }  (* slice 64 64 *)
-      rename x0 into addr_val.
-      (* First Store64: low 8 bytes at addr *)                                                            
-      assert (Haddr2 : eval s2 addr addr_val) by (eapply Hls2; eapply Hls1; exact H2).
-      eapply Store64_R with (v' := Z.land v (Z.ones 64)) (va := addr_val) in HSx;                                         
-      try eassumption; eauto with nocore;                                                                              
-      try solve [rewrite ?Z.shiftr_0_r in *; bitblast.Z.bitblast].
-      destruct_head'_ex; destruct_head'_and. rename x0 into m1. rewrite H3, E0. simpl.
-
-      (* Step through App(const 8), App(add) to learn about addr_hi *)
-      eapply App_R in HSeight as (Hs4 & Hsub4 & Heval_eight).
-      2: { exact H5. }                                                                                                   
-      2: { econstructor; [constructor | reflexivity]. }
-                                                                                                     
-      eapply App_R in HSaddr_hi as (Hs5 & Hsub5 & Heval_addr_hi).                                                
-      2: { exact Hs4. }                                                                                                  
-      2: { eapply ENod with (args' := [addr_val; 8%Z]).                                                                        
-          - constructor; [eapply Hsub4; eapply H6; exact Haddr2 | constructor; [exact Heval_eight | constructor]].
-          - cbn [interp_op]. reflexivity.
-      }
-      cbn [fold_right] in Heval_addr_hi. simpl in Heval_addr_hi.
-      eapply Store64_R with (v' := Z.shiftr v 64) (va := Z.land (addr_val + 8) (Z.ones 64)) in H;
-        try eassumption; eauto with nocore;                                                                              
-        try solve [bitblast.Z.bitblast].
-      destruct_head'_ex; destruct_head'_and. rename x0 into m2.
-      
-      (* Now the main lemma, composition of the two memory operations *)
-      eexists; split.
-      2: { split. eassumption. clear - H1 Hls1 Hls2 H6 Hsub4 Hsub5 H10. eauto 8 using subsumed_trans. }
-      rewrite (SetMem_addr_mod _ (addr_val + 8)) in H.                            
-      eapply (SetMem_compose m addr_val 8 8 v m1 m2).
-      { exact H4. }
-      { exact H. } 
-    }                                                                                       
-    { (* 256-bit store *)
-      admit.
+    { (* 64-bit store: direct write *)
+      eapply Store64_R with (v' := v) in H;
+        try eassumption; eauto with nocore;
+        try solve [rewrite Hbound_old; bitblast.Z.bitblast].
+      destruct H as (m' & Hset & HR' & Hsub'). replace (N.to_nat (64 / 8)) with 8%nat; [|eauto].
+      rewrite Hset.
+      replace (N.to_nat (64 / 8)) with 8%nat by (simpl; lia).
+			eauto 9.
     }
-    { (* err *)
-      step_symex. discriminate H.
-    }
-  Qed. *)
+  }
+  { (* 128-bit case *)
+    eapply R_Store128_of_idx in H; try eassumption; try lia.
+    (* need eval s0 i v — propagate through subsumed *)
+    destruct H as (m' & Hset & HR' & Hsub').
+    exists m'. split; [|split; [exact HR'|solve_subsumed]].
+    rewrite H3, E0. exact Hset.    
+		{ eauto. }
+  }
+  { (* 256-bit case *)
+    eapply R_Store256_of_idx in H; try eassumption; try lia.
+    destruct H as (m' & Hset & HR' & Hsub').
+    exists m'. split; [|split; [exact HR'|solve_subsumed]].
+    rewrite H3, E1. exact Hset.
+    { eauto. }
+  }
+Qed.
 
-
-
-
-
-
-(* Setting address a to v gives state s' and i evals to v in s *)
-(* then there exists a new machine state m' corresponding to s' s.t. setting a to v in m gives m' *)
-(* note: do the two SetOperand both truncate inputs or not?... *)
-(* === Level 4: operand dispatcher (write side) ===
-   One unfold of SetOperand; one composer-level call per ARG case.
-   Reg branch -> R_SetReg (unified, no full/partial gating exposed).
-   Mem branch -> R_Store. *)
 Lemma R_SetOperand {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m)
   (sz:OperationSize) (sa:AddressSize) a i _tt s' (H : Symbolic.SetOperand a i s = Success (_tt, s'))
   v (Hv : eval s i v) (Hsa : sa = 64%N)
   : exists m', SetOperand sa sz m a v = Some m' /\ R s' m' /\ s :< s'.
-(* PROOF: destruct a; cbn in H.
-     reg r   -> R_SetReg (returns the direct R s' (update_reg_with ...)
-                conjunction; just `eexists; split; [reflexivity|]; exact ...`).
-     mem mm  -> R_Store.
-     const _ -> cbn in H; inversion H.
-     label _ -> cbv [err] in H; discriminate.
-   Two one-call branches; no inline expansion of SetReg's full/partial split. *)
-Admitted.
+Proof. 
+	destruct a.
+	{ unfold Symbolic.SetOperand in H. unfold SetOperand. eapply R_SetReg; eauto. }
+	{ unfold Symbolic.SetOperand in H. unfold SetOperand. eapply R_Store; eauto. }
+	{ unfold Symbolic.SetOperand in H. discriminate H. }
+	{ unfold Symbolic.SetOperand in H. discriminate H. }
+Qed. 
+	
 
 Ltac step_SetOperand :=
   match goal with
