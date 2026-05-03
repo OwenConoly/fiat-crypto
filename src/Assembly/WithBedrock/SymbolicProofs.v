@@ -52,16 +52,133 @@ Local Notation R_flag := (R_flag G).
 Local Notation R_flags := (R_flags G).
 Local Notation R_cell64 := (R_cell64 G).
 Local Notation R_mem := (R_mem G).
-Local Notation R := (R G).
+Local Notation R := (R frame G).
 
 Notation subsumed d1 d2 := (forall i v, eval d1 i v -> eval d2 i v).
 Local Infix ":<" := subsumed (at level 70, no associativity).
 
-Import ListNotations.
+
+Ltac him :=
+    match goal with
+    | |- context G [match ?x with _ => _ end] =>
+      assert_fails (idtac; match x with context[match _ with _ => _
+  end] => idtac end);
+      let ex := eval hnf in x in
+      first [progress change x with ex; progress cbv match beta |
+  destruct x eqn:?]
+    end.
+
+  Global Existing Instance expr_beq_spec.
+
+  Ltac destr_expr_beq :=
+    match goal with
+    | H : context [expr_beq ?a ?b] |- _ => destr.destr (expr_beq a b)
+    end.
+
+  Ltac pose_operation_size_cases :=
+    match goal with
+    | H : Syntax.operation_size _ = Some _ |- _ =>
+        unique pose proof (operation_size_cases _ _ H)
+    end.
+
+  Ltac invert_eval :=
+    match goal with
+    | H : context[match reveal ?d ?n ?i with _ => _ end] |- _ =>
+  destruct (reveal d n i) as [?|[[] []]]eqn:? in *
+    | H : reveal ?d _ ?i = ?rhs, G : eval ?d (ExprRef ?i) ?v |- _ =>
+        let h := Head.head rhs in is_constructor h;
+        let HH := fresh H in
+        epose proof (eval_reveal _ d _ i v G _ H) as HH;
+        clear H; rename HH into H
+    | H : eval ?d (ExprApp ?n) ?v |- _ =>
+        let HH := fresh H in
+        let x := fresh "x" in
+        inversion E0 as [|? ? x ? [] HH ]; clear x;
+        clear H; subst; rename HH into H
+    | H : eval _ (ExprApp _) _ |- _ =>
+        inversion H; clear H; subst
+    | H : Forall2 _ nil _ |- _
+      => inversion H; clear H; subst
+    | H : Forall2 _ _ nil |- _
+      => inversion H; clear H; subst
+    | H : Forall2 _ (_ :: _) _ |- _
+      => inversion H; clear H; subst
+    | H : Forall2 _ _ (_ :: _) |- _
+      => inversion H; clear H; subst
+    | H : interp_op ?o ?a = Some ?v |- _ => inversion H; clear H; subst
+    end.
+
+  Ltac resolve_match_using_hyp :=
+    let rewrite_for x
+      := match goal with
+         | [ H : x = ?v |- _ ]
+           => let h := Head.head v in
+              is_constructor h;
+              rewrite H
+         end in
+    match goal with
+    | [ |- context[match ?x with _ => _ end] ] => rewrite_for x
+    | [ |- context[match (if _ then ?x else ?y) with _ => _ end] ]
+      => progress (try rewrite_for x; try rewrite_for y)
+    end.
+
+  Ltac resolve_SetOperand_using_hyp :=
+    match goal with
+    | |- context[match SetOperand ?a ?b ?c ?d ?x with _ => _ end] =>
+        match goal with H : SetOperand a b c d ?y = Some _ |- _ =>
+            replace x with y; [rewrite H|]; cycle 1 end
+    | |- context[SetOperand ?a ?b ?c ?d ?x = Some _] =>
+        match goal with H : SetOperand a b c d ?y = Some _ |- _ =>
+            replace x with y; [rewrite H|]; cycle 1 end
+    end.
+
+  Ltac lift_let_goal :=
+    match goal with
+    | |- context G [let x := ?v in @?C x] =>
+        let xH := fresh x in pose v as xH;
+        let g := context G [C xH] in change g; cbv beta
+    end.
+
+  Ltac eval_same_expr_goal :=
+    match goal with
+     | |- eval ?d ?e ?v =>
+         match goal with
+           H : eval d e ?v' |- _ =>
+               let Heq := fresh in
+               enough (Heq : v = v') by (rewrite Heq; exact H);
+               try clear H e
+         end
+     | |- eval ?d ?e ?v =>
+         let H := fresh in
+         let v' := open_constr:(_) in
+         eassert (eval d e v') by (eauto 99 with nocore);
+         let Heq := fresh in
+         enough (Heq : v = v') by (rewrite Heq; exact H);
+         try clear H e
+     end.
+
+  Ltac step :=
+    first
+    [ lift_let_goal
+    | resolve_match_using_hyp
+    | progress (cbn beta iota delta [fst snd Syntax.op Syntax.args] in
+  *; cbv beta iota delta [Reveal RevealConst Crypto.Util.Option.bind
+  Symbolic.ret Symbolic.err Symeval mapM PreserveFlag some_or] in *;
+  subst)
+    | Prod.inversion_prod_step
+    | inversion_ErrorT_step
+    | Option.inversion_option_step
+    | invert_eval
+    | step_symex
+    | destr_expr_beq
+    | rewrite N.eqb_refl
+    ].
+  Ltac step1 := step; (eassumption||trivial); [].
+  Ltac step01 := solve [step] || step1.
 
 (* Executing instruction in state s gives state s' *)
 (* exists a machine state correponding to s' s.t.  *)
-Lemma SymexNornalInstruction_R {opts : symbolic_options_computed_opt} {descr:description} s m (HR : R s m) (instr : NormalInstruction) :
+Lemma SymexNornalInstruction_R {opts : symbolic_options_computed_opt} {descr:description} (s : symbolic_state) m (HR : R s m) (instr : NormalInstruction) :
   forall _tt s', Symbolic.SymexNormalInstruction instr s = Success (_tt, s') ->
   exists m', Semantics.DenoteNormalInstruction m instr = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
@@ -69,19 +186,20 @@ Proof using Type.
   case instr as [op args].
 
   cbv [SymexNormalInstruction OperationSize] in H.
-  repeat (repeat destruct_one_match_hyp; repeat step01).
+  repeat (repeat destruct_one_match_hyp; repeat step_symex).
 
-  all : repeat
+  all : repeat (* eval goals *)
   match goal with
   | |- eval_node _ _ (?op, ?args) ?e =>
       solve [repeat (eauto 99 with nocore || econstructor)]
   | |- eval _ (ExprApp (?op, ?args)) ?e =>
       solve [repeat (eauto 99 with nocore || econstructor)]
-  | _ => step
+  | _ => step; lia
   | |- eval _ (ExprRef ?v) ?e => eval_same_expr_goal; try solve [ (* bashing *)
-      exact eq_refl || rewrite Z.bit0_mod; trivial; rewrite  Z.mod_small; trivial; Lia.lia]
+      exact eq_refl || rewrite Z.bit0_mod; trivial; rewrite  Z.mod_small; trivial; lia]
   end.
 
+	(* ?? *)
   all: cbv beta delta [DenoteNormalInstruction];
        repeat
   match goal with
@@ -97,12 +215,14 @@ Proof using Type.
   | |- _ /\ _ :< _ => split; [|solve[eauto 99 with nocore] ]
   end.
 
+	(* ?? *)
   all: repeat first [ match goal with
                       | [ H : DenoteOperand _ _ _ (Syntax.const _) = Some _ |- _ ] => cbv [DenoteOperand DenoteConst operand_size standalone_operand_size CONST_of_Z] in H
                       end
                     | progress Option.inversion_option
                     | progress subst ].
 
+	(* these are all random specific things that i guess applied to a few goals? *)
   all : cbn [fold_right map]; rewrite ?N2Z.id, ?Z.add_0_r, ?Z.add_assoc, ?Z.mul_1_r, ?Z.land_m1_r, ?Z.lxor_0_r, ?Z.lor_0_r;
     (congruence||eauto).
   all: rewrite ?Z.land_ones_low_alt by now try split; try apply Zpow_facts.Zpower2_lt_lin; lia.
