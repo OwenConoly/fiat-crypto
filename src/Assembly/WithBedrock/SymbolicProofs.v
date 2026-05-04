@@ -36,6 +36,7 @@ Require Export Crypto.Assembly.WithBedrock.SymbolicProofsCore.
 Require Import Crypto.Assembly.WithBedrock.SymbolicVectorProofs.
 
 Local Coercion ExprRef : idx >-> expr.
+Import ListNotations.
 
 Section WithFrame.
 Context (frame : mem_state -> Prop).
@@ -56,6 +57,67 @@ Local Notation R := (R frame G).
 
 Notation subsumed d1 d2 := (forall i v, eval d1 i v -> eval d2 i v).
 Local Infix ":<" := subsumed (at level 70, no associativity).
+
+(* duplicates from core *) 
+
+Ltac solve_subsumed :=
+solve [ eassumption
+      | apply subsumed_refl
+      | repeat (eapply subsumed_trans; [eassumption|]); eapply subsumed_refl ].
+
+
+Ltac step_GetFlag :=
+  match goal with
+  | H : GetFlag ?f ?s = Success (?i0, _) |- _ =>
+    let v := fresh "v" f in let Hv := fresh "H" v in let Hvf := fresh "Hv" f in
+    let Hi := fresh "H" i0 in let Heq := fresh H "eq" in
+    case (GetFlag_R s _ ltac:(eassumption) _ _ _ H) as (v&Hi&Hvf&Heq); clear H;
+    (let i := fresh "i" f in try rename i0 into i);
+    (try match type of Heq with _ = ?s' => subst s' end)
+  end.
+
+Ltac step_Merge :=
+  match goal with
+  | H : Merge ?e ?s = Success (?i, ?s') |- _ =>
+    let v := open_constr:(_) in let Hi := fresh "H" i in
+    let Hs' := fresh "H" s' in let Hl := fresh "Hl" s' in
+    let t := open_constr:(fun A B => Merge_R s _ A e v B _ _ H) in
+    unshelve (edestruct t as (Hs'&Hl&Hi); clear H); shelve_unifiable;
+    [eassumption|..]
+  end.
+
+Ltac step_App :=
+    match goal with
+    | H : Symbolic.App ?n ?s = Success (?i, ?s') |- _ =>
+      let Hi := fresh "H" i in
+      let Hl := fresh "Hl" s' in let Hs' := fresh "H" s' in
+      let t := open_constr:(fun A B => App_R s _ A n _ B _ _ H) in
+      unshelve (edestruct t as (Hs'&Hl&Hi); clear H); shelve_unifiable;
+      [eassumption|..]
+    end.
+
+Ltac step_Address :=
+  match goal with HSa: context[Address] |- _ =>
+      eapply Address_R in HSa; [|eassumption];
+          destruct HSa as (?&?&?&?&?)
+  end.
+
+Ltac step_SetFlag :=
+  match goal with
+  | H : Symbolic.SetFlag ?f ?i ?s = Success (?_tt, ?s') |- _ =>
+    let i := open_constr:(_) in let b := open_constr:(_) in
+    let Hs' := fresh "H" s' in let Hlt := fresh "He" s' in
+    let t := open_constr:(fun A B => SetFlag_R s _ f A i b B _ _ H) in
+    unshelve (edestruct t as (Hs'&Hlt); clear H); shelve_unifiable;
+    [eassumption|..|clear H]
+  end.
+
+Ltac step_GetOperand :=
+  match goal with
+  | H : GetOperand ?a ?s = Success (?i0, ?s') |- _ =>
+
+
+(* new tactics *)
 
 
 Ltac him :=
@@ -176,30 +238,73 @@ Ltac him :=
   Ltac step1 := step; (eassumption||trivial); [].
   Ltac step01 := solve [step] || step1.
 
+Ltac is_vector_goal :=
+    match goal with
+    (* | H : context[Syntax.vpaddq] |- _ => idtac *)
+    | H : context[Syntax.vpsubq] |- _ => idtac
+    | H : context[Syntax.vpandq] |- _ => idtac
+    | H : context[Syntax.vporq] |- _ => idtac
+    | H : context[Syntax.vpxorq] |- _ => idtac
+    | H : context[Syntax.vpaddd] |- _ => idtac
+    | H : context[Syntax.vpsubd] |- _ => idtac
+    | H : context[Syntax.vmovdqu] |- _ => idtac
+    | H : context[Syntax.vmovq] |- _ => idtac
+    | H : context[Syntax.vpbroadcastq] |- _ => idtac
+    | H : context[Syntax.vpblendd] |- _ => idtac
+    | H : context[Syntax.vpmuludq] |- _ => idtac
+    | H : context[Syntax.vpsrlq] |- _ => idtac
+    | H : context[Syntax.vpsllq] |- _ => idtac
+    | H : context[Syntax.vpunpcklqdq] |- _ => idtac
+    | H : context[Syntax.vpextrq] |- _ => idtac
+    | H : context[Syntax.vextracti128] |- _ => idtac
+    | H : context[Syntax.vinserti128] |- _ => idtac
+    (* | H : context[Syntax.vzeroupper] |- _ => idtac *)
+    end.
+
 (* Executing instruction in state s gives state s' *)
 (* exists a machine state correponding to s' s.t.  *)
 Lemma SymexNornalInstruction_R {opts : symbolic_options_computed_opt} {descr:description} (s : symbolic_state) m (HR : R s m) (instr : NormalInstruction) :
   forall _tt s', Symbolic.SymexNormalInstruction instr s = Success (_tt, s') ->
   exists m', Semantics.DenoteNormalInstruction m instr = Some m' /\ R s' m' /\ s :< s'.
 Proof using Type.
-  intros [] s' H.
+    intros [] s' H.
   case instr as [op args].
-
+  
+	(* fully decompose symbolic side *)
   cbv [SymexNormalInstruction OperationSize] in H.
-  repeat (repeat destruct_one_match_hyp; repeat step_symex).
+  repeat (repeat destruct_one_match_hyp; repeat step01).
+	(* 1: 54 goals 
+all look like
+exists m' : machine_state,
+    DenoteNormalInstruction m {| prefix := op; Syntax.op := adc; args := [a; a0] |} = Some m' /\ R s' m' /\ s :< s'
+*)
 
-  all : repeat (* eval goals *)
+	all: try (is_vector_goal; shelve).
+
+(* 2 *)
+ all : repeat
   match goal with
   | |- eval_node _ _ (?op, ?args) ?e =>
-      solve [repeat (eauto 99 with nocore || econstructor)]
+       solve [repeat (eauto 99 with nocore || econstructor)]
   | |- eval _ (ExprApp (?op, ?args)) ?e =>
       solve [repeat (eauto 99 with nocore || econstructor)]
-  | _ => step; lia
-  | |- eval _ (ExprRef ?v) ?e => eval_same_expr_goal; try solve [ (* bashing *)
-      exact eq_refl || rewrite Z.bit0_mod; trivial; rewrite  Z.mod_small; trivial; lia]
+  | _ => step
+  | |- eval _ (ExprRef ?v) ?e => eval_same_expr_goal; try
+  solve [
+      exact eq_refl || rewrite Z.bit0_mod; trivial; rewrite Z.mod_small;
+  trivial; Lia.lia]
   end.
+	(* 2: 98 goals
+step fires first on everything. the eval branches are just for cleanup. 
+a few goals look like 
+goal 37 (ID 125676) is:
+ Z.b2z ?b0 = Z.land (Z.shiftr v (Z.of_N 0)) (Z.ones (Z.of_N 1))
+but most are still
+exists m' : machine_state,
+   DenoteNormalInstruction m {| prefix := op; Syntax.op := Syntax.sar; args := [a; a0] |} = Some m' /\ R s' m' /\ s :< s'
+*)
 
-	(* ?? *)
+	(* fully decompose semantic side *)
   all: cbv beta delta [DenoteNormalInstruction];
        repeat
   match goal with
@@ -214,21 +319,38 @@ Proof using Type.
   | |- exists _, None   = Some _ /\ _ => exfalso
   | |- _ /\ _ :< _ => split; [|solve[eauto 99 with nocore] ]
   end.
+	(* 3: 148 goals 
+lots of Z arith goals, e.g.  
+Z.land (fold_right Z.add 0 [v; v0; Z.b2z vCF]) (Z.ones (Z.of_N n)) = Z.land (v3 + v4 + Z.b2z vCF1) (Z.ones (Z.of_N n))
+Some like 
+R s'
+   (SetFlag
+      (SetFlag (HavocFlagsFromResult n m0 (Z.land (fold_right Z.add 0 [v; v0; Z.b2z vCF]) (Z.ones (Z.of_N n)))) CF
+         (Z.odd (Z.shiftr (v3 + v4 + Z.b2z vCF1) (Z.of_N n))))
+      OF
+      (negb
+         (Z.signed n (Z.land (fold_right Z.add 0 [v; v0; Z.b2z vCF]) (Z.ones (Z.of_N n))) =?
+          Z.signed n v3 + Z.signed n v4 + Z.signed n (Z.b2z vCF1))))
+*)
 
-	(* ?? *)
+	(* const operands *)
   all: repeat first [ match goal with
                       | [ H : DenoteOperand _ _ _ (Syntax.const _) = Some _ |- _ ] => cbv [DenoteOperand DenoteConst operand_size standalone_operand_size CONST_of_Z] in H
                       end
                     | progress Option.inversion_option
                     | progress subst ].
+	(* 4: still 148... no visible cahnge? *)
 
-	(* these are all random specific things that i guess applied to a few goals? *)
+	(* bashing Z goals *)
   all : cbn [fold_right map]; rewrite ?N2Z.id, ?Z.add_0_r, ?Z.add_assoc, ?Z.mul_1_r, ?Z.land_m1_r, ?Z.lxor_0_r, ?Z.lor_0_r;
     (congruence||eauto).
   all: rewrite ?Z.land_ones_low_alt by now try split; try apply Zpow_facts.Zpower2_lt_lin; lia.
   all: rewrite ?(fun x => Z.land_ones_low_alt (x / 8) x) by now split; try (eapply Z.le_lt_trans; [ | apply Zpow_facts.Zpower2_lt_lin ]); try lia; Z.to_euclidean_division_equations; nia.
   all: try exact eq_refl.
   all : try solve [rewrite Z.land_ones, Z.bit0_mod by Lia.lia; exact eq_refl].
+	(* 5: 40 goals 
+	mostly R _ SetFlag or exists m :
+*)
 
   all: try solve[ (* bash flags weakening *)
   match goal with H : R ?s' _ |- R ?s' ?m' =>
@@ -246,6 +368,9 @@ Proof using Type.
              end; rewrite ?Z.add_0_r, ?Z.odd_opp; eauto; try Lia.lia
   end
   ].
+(* 6:25 goals 
+Some R _ SetFLag goals left, some other misc
+*)
 
   Unshelve. all : match goal with H : context[Syntax.sub] |- _ => idtac | _ => shelve end.
   { cbn; repeat (rewrite ?Z.land_ones, ?Z.add_opp_r by Lia.lia).
