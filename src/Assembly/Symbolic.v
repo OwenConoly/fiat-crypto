@@ -4652,16 +4652,6 @@ Fixpoint muludq_aux {opts : symbolic_options_computed_opt} {descr : description}
     muludq_aux v1 v2 (S lane_idx) n lane_width new_acc
   end.
 
-Definition SymexMuludq {opts : symbolic_options_computed_opt} {descr : description}
-  {s : OperationSize} {sa : AddressSize}
-  (dst src1 src2 : ARG) : M unit :=
-  let num_lanes := N.to_nat (s / 64)%N in
-  v1 <- GetOperand src1;
-  v2 <- GetOperand src2;
-  zero <- App (const 0, []);
-  result <- muludq_aux v1 v2 0 num_lanes 64%N zero;
-  SetOperand dst result.
-
 (* Vector shift by immediate: apply shift_op per lane with shared shift amount *)
 Fixpoint vector_shift_imm_aux {opts : symbolic_options_computed_opt} {descr : description}
   (v shift_amt : idx) (shift_op : op) (lane_idx num_remaining : nat)
@@ -4702,10 +4692,7 @@ Fixpoint unpcklqdq_aux {opts : symbolic_options_computed_opt} {descr : descripti
 
 End SymbolicVector.
 
-
-
 Notation "f @ ( x , y , .. , z )" := (PreApp f (@cons pre_expr x (@cons pre_expr y .. (@cons pre_expr z nil) ..))) (at level 10) : x86symex_scope.
-Print SymbolicVector.SymexVectorBinOp.
 
 Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:description} (instr : NormalInstruction) : M unit :=
   let stack_addr_size : AddressSize := 64%N in
@@ -4720,11 +4707,10 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     SetOperand dst v
 
 		(* avx instrs *)
-  | vmovq, [dst; src] => (* this is technically innacurate - we should be zeroing upper bits, but for now this is a starting point. *)
-    (* vmovq always operates on 64 bits *)
-    v <- GetOperand (s:=64) src; (* gets the full register *)
-    v <- (App ((slice 0 64), [v]));
-    SetOperand (s:=64) dst v
+  | vmovq, [dst; src] =>
+    v <- GetOperand (s:=64%N) src;
+    v <- App ((slice 0 64), [v]);
+    SetOperand (s:=64%N) dst v
 
   | vpaddq, [dst; src1; src2] => (* packed add of quadwords - no flags affected *)
     SymbolicVector.SymexVectorBinOp dst src1 src2 (add 64) 64
@@ -4743,15 +4729,15 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
   | vpsubd, [dst; src1; src2] => (* packed subtract doublewords *)
       SymbolicVector.SymexVectorBinOp dst src1 src2 (sub 32) 32%N 
 
-  | vpbroadcastq, [dst; src] => (* broadcast 64-bit value to all qword lanes *)
-    v <- GetOperand (s:=64) src;
+  | vpbroadcastq, [dst; src] =>
+    v <- GetOperand (s:=64%N) src;
     lane <- App ((slice 0 64), [v]);
     let num_lanes := N.to_nat (s / 64)%N in
     zero <- App (const 0, []);
     result <- SymbolicVector.broadcast_aux lane 0 num_lanes 64%N zero;
     SetOperand dst result
 
-  | vpblendd, [dst; src1; src2; imm] => (* blend dwords by immediate mask *)
+  | vpblendd, [dst; src1; src2; imm] =>
     v1 <- GetOperand src1;
     v2 <- GetOperand src2;
     imm_val <- GetOperand imm;
@@ -4762,7 +4748,12 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     SetOperand dst result
 
   | vpmuludq, [dst; src1; src2] => (* multiply low 32 bits of each 64-bit lane *)
-    SymbolicVector.SymexMuludq dst src1 src2
+    let num_lanes := N.to_nat (s / 64)%N in
+ 		 v1 <- GetOperand src1;
+  	 v2 <- GetOperand src2;
+  	 zero <- App (const 0, []);
+  	 result <- muludq_aux v1 v2 0 num_lanes 64%N zero;
+  	 SetOperand dst result.
 
   | vpsrlq, [dst; src; imm] => (* shift right logical each 64-bit lane *)
     SymbolicVector.SymexVectorShiftImm dst src imm (shr 64)
@@ -4770,7 +4761,7 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
   | vpsllq, [dst; src; imm] => (* shift left logical each 64-bit lane *)
     SymbolicVector.SymexVectorShiftImm dst src imm (shl 64)
 
-  | vpunpcklqdq, [dst; src1; src2] => (* interleave low qwords from each 128-bit half *)
+  | vpunpcklqdq, [dst; src1; src2] =>
     v1 <- GetOperand src1;
     v2 <- GetOperand src2;
     let num_halves := N.to_nat (s / 128)%N in
@@ -4778,23 +4769,23 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     result <- SymbolicVector.unpcklqdq_aux v1 v2 0 num_halves zero;
     SetOperand dst result
 
-  | vpextrq, [dst; src; imm] => (* extract 64-bit lane from XMM *)
+  | vpextrq, [dst; src; imm] =>
     v <- GetOperand src;
     imm_val <- GetOperand imm;
     lane <- RevealConst imm_val;
     result <- App (slice (Z.to_N (lane * 64)) 64, [v]);
-    SetOperand (s:=64) dst result
+    SetOperand (s:=64%N) dst result
 
-  | vextracti128, [dst; src; imm] => (* extract 128-bit half from YMM *)
+  | vextracti128, [dst; src; imm] =>
     v <- GetOperand src;
     imm_val <- GetOperand imm;
     half <- RevealConst imm_val;
     result <- App (slice (Z.to_N (half * 128)) 128, [v]);
-    SetOperand (s:=128) dst result
+    SetOperand (s:=128%N) dst result
 
-  | vinserti128, [dst; src1; src2; imm] => (* insert 128-bit XMM into YMM half *)
+  | vinserti128, [dst; src1; src2; imm] =>
     v1 <- GetOperand src1;
-    v2 <- GetOperand (s:=128) src2;
+    v2 <- GetOperand (s:=128%N) src2;
     imm_val <- GetOperand imm;
     half <- RevealConst imm_val;
     result <- App (set_slice (Z.to_N (half * 128)) 128, [v1; v2]);

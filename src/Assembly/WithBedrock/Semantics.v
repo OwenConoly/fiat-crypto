@@ -275,6 +275,7 @@ Definition rcrcnt s cnt : Z :=
   if N.eqb s 16 then Z.land cnt 0x1f mod 17 else
   Z.land cnt (Z.of_N s-1).
 
+
 (* NOTE: currently immediate operands are treated as if sign-extension has been
  * performed ahead of time. *)
 Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstruction) : option machine_state :=
@@ -338,79 +339,65 @@ Definition DenoteNormalInstruction (st : machine_state) (instr : NormalInstructi
     Some (SetFlag st flag (Z.odd (Z.shiftr (v1 + v2 + c) (Z.of_N s))))
 
 		(* AVX instructions *)
-  | vmovq, [dst; src] => (* move quadword - handles vector/scalar conversions *)
-    v <- DenoteOperand sa 64 st src;  (* Will still read a whole register.. *)
-    let v := Z.land v (Z.ones 64) in  (* Ensure 64-bit value *)
+  | vmovq, [dst; src] =>
+    v <- DenoteOperand sa 64 st src;
+    let v := Z.land v (Z.ones 64) in
     SetOperand sa 64 st dst v
-  | vpaddq, [dst; src1; src2] => (* vector packed add quadword *)
-		let lane_add := (fun a b => Z.land (a + b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_add (N.to_nat (N.div s 64)) 64
-  | vpsubq, [dst; src1; src2] => (* vector packed subtract quadword *)
-		let lane_sub := (fun a b => Z.land (a - b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_sub (N.to_nat (N.div s 64)) 64
-		(* 32-bit versions *) 
+  | vpaddq, [dst; src1; src2] =>
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (a + b) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
+  | vpsubq, [dst; src1; src2] =>
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (a - b) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
   | vpaddd, [dst; src1; src2] =>
-		let lane_add := (fun a b => Z.land (a + b) (Z.ones 32)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_add (N.to_nat (N.div s 32)) 32
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (a + b) (Z.ones 32)) (N.to_nat (N.div s 32)) 32
   | vpsubd, [dst; src1; src2] =>
-		let lane_sub := (fun a b => Z.land (a - b) (Z.ones 32)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_sub (N.to_nat (N.div s 32)) 32
-			(* bitwise logic *)
-	| vpandq, [dst; src1; src2] =>
-		let lane_and := (fun a b => Z.land (Z.land a b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_and (N.to_nat (N.div s 64)) 64
-	| vporq, [dst; src1; src2] =>
-		let lane_or := (fun a b => Z.land (Z.lor a b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_or (N.to_nat (N.div s 64)) 64
-	| vpxorq, [dst; src1; src2] =>
-		let lane_xor := (fun a b => Z.land (Z.lxor a b) (Z.ones 64)) in
-      SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 lane_xor (N.to_nat (N.div s 64)) 64
-			(* other stuff *)
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (a - b) (Z.ones 32)) (N.to_nat (N.div s 32)) 32
+  | vpandq, [dst; src1; src2] =>
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (Z.land a b) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
+  | vporq, [dst; src1; src2] =>
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (Z.lor a b) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
+  | vpxorq, [dst; src1; src2] =>
+    SemanticVector.DenoteVectorBinOp sa s st dst src1 src2 (fun a b => Z.land (Z.lxor a b) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
   | vpbroadcastq, [dst; src] =>
     v <- DenoteOperand sa 64 st src;
     let v64 := Z.land v (Z.ones 64) in
     let result := SemanticVector.broadcast v64 (N.to_nat (N.div s 64)) 64 in
     SetOperand sa s st dst result
-
-  | vpblendd, [dst; src1; src2; const imm] =>
+  | vpblendd, [dst; src1; src2; imm_arg] =>
     v1 <- DenoteOperand sa s st src1;
     v2 <- DenoteOperand sa s st src2;
+    imm <- DenoteOperand sa s st imm_arg;
     let result := SemanticVector.blend v1 v2 imm (N.to_nat (N.div s 32)) 32 in
     SetOperand sa s st dst result
-
   | vpmuludq, [dst; src1; src2] =>
     v1 <- DenoteOperand sa s st src1;
     v2 <- DenoteOperand sa s st src2;
     let result := SemanticVector.muludq_aux v1 v2 0 (N.to_nat (N.div s 64)) in
     SetOperand sa s st dst result
-
-  | vpsrlq, [dst; src; const imm] =>
-    let lane_shr := (fun v => Z.land (Z.shiftr v imm) (Z.ones 64)) in
-    SemanticVector.DenoteVectorUnaryOp sa s st dst src lane_shr (N.to_nat (N.div s 64)) 64
-
-  | vpsllq, [dst; src; const imm] =>
-    let lane_shl := (fun v => Z.land (Z.shiftl v imm) (Z.ones 64)) in
-    SemanticVector.DenoteVectorUnaryOp sa s st dst src lane_shl (N.to_nat (N.div s 64)) 64
-
+  | vpsrlq, [dst; src; imm_arg] =>
+    imm <- DenoteOperand sa s st imm_arg;
+    SemanticVector.DenoteVectorUnaryOp sa s st dst src (fun v => Z.land (Z.shiftr v imm) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
+  | vpsllq, [dst; src; imm_arg] =>
+    imm <- DenoteOperand sa s st imm_arg;
+    SemanticVector.DenoteVectorUnaryOp sa s st dst src (fun v => Z.land (Z.shiftl v imm) (Z.ones 64)) (N.to_nat (N.div s 64)) 64
   | vpunpcklqdq, [dst; src1; src2] =>
     v1 <- DenoteOperand sa s st src1;
     v2 <- DenoteOperand sa s st src2;
     let result := SemanticVector.unpcklqdq_aux v1 v2 0 (N.to_nat (N.div s 128)) in
     SetOperand sa s st dst result
-
-  | vpextrq, [dst; src; const imm] =>
+  | vpextrq, [dst; src; imm_arg] =>
     v <- DenoteOperand sa 128 st src;
+    imm <- DenoteOperand sa s st imm_arg;
     let result := Z.land (Z.shiftr v (imm * 64)) (Z.ones 64) in
     SetOperand sa 64 st dst result
-
-  | vextracti128, [dst; src; const imm] =>
+  | vextracti128, [dst; src; imm_arg] =>
     v <- DenoteOperand sa 256 st src;
+    imm <- DenoteOperand sa s st imm_arg;
     let result := Z.land (Z.shiftr v (imm * 128)) (Z.ones 128) in
     SetOperand sa 128 st dst result
-
-  | vinserti128, [dst; src1; src2; const imm] =>
+  | vinserti128, [dst; src1; src2; imm_arg] =>
     v1 <- DenoteOperand sa 256 st src1;
     v2 <- DenoteOperand sa 128 st src2;
+    imm <- DenoteOperand sa s st imm_arg;
     let offset := imm * 128 in
     let mask := Z.shiftl (Z.ones 128) offset in
     let cleared := Z.land v1 (Z.lnot mask) in
