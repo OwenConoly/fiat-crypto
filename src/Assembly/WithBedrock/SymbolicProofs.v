@@ -3049,29 +3049,26 @@ Proof using Type.
   (* vpmuludq *)
   Unshelve. all : match goal with H : context[Syntax.vpmuludq] |- _ => idtac | _ => shelve end; shelve_unifiable.
   { step_muludq. step_symex. cleanup. exists m0. solve_R_subgoals. }
-	
-  (* vpsrlq *)
-	Unshelve. all : match goal with H : context[Syntax.vpsrlq] |- _ => idtac | _ => shelve end; shelve_unifiable.
-  { step_shift_imm. step_symex; cleanup. 
-		exists m0.  unfold SemanticVector.DenoteVectorUnaryOp. rewrite Hv0. solve_R_subgoals.
-	}
+
+	(* vpsrlq / vpsllq *)
+  Unshelve. all : match goal with 
+  					H : context[Syntax.vpsrlq] |- _ => idtac 
+  				| H :	context[Syntax.vpsllq] |- _ => idtac 
+  				| _ => shelve end; shelve_unifiable.
+    all: step_shift_imm; step_symex; cleanup; exists m0; unfold
+  SemanticVector.DenoteVectorUnaryOp; rewrite Hv0; solve_R_subgoals.
 
   (* vpunpcklqdq *)
   Unshelve. all : match goal with H : context[Syntax.vpunpcklqdq] |- _ => idtac | _ => shelve end; shelve_unifiable.
   { step_unpcklqdq. step_symex; cleanup. exists m0. solve_R_subgoals. }
 
-  (* vpextrq *)
-  Unshelve. all : match goal with H : context[Syntax.vpextrq] |- _ => idtac | _ => shelve end; shelve_unifiable.
-  { normalize_NZ. rewrite Z2N.id in *. bitblast.Z.bitblast. all: apply (DenoteOperand_nonneg _ _ _ _ _ Hv1). }
-
-  (* vextracti128 *)
-  Unshelve. all : match goal with H : context[Syntax.vextracti128] |- _ => idtac | _ => shelve end; shelve_unifiable.
-  { eapply vextracti128_R;  [eassumption | lia | eassumption]. }
-
-  (* vinserti128 *)
-  Unshelve. all : match goal with H : context[Syntax.vinserti128] |- _ => idtac | _ => shelve end; shelve_unifiable.
-  { eapply vinserti128_R;  [eassumption | lia | eassumption]. }
-
+  Unshelve. all : match goal with 
+  					H : context[Syntax.vpextrq] |- _ => idtac 
+  				| H :	context[Syntax.vextracti128] |- _ => idtac 
+  				| H :	context[Syntax.vinserti128] |- _ => idtac 
+  				| _ => shelve end; shelve_unifiable.
+  all: normalize_NZ; rewrite Z2N.id in *; try solve [eapply DenoteOperand_nonneg; eassumption]; bitblast.Z.bitblast.
+  
 (* Scalar instrs *) 
 
 
@@ -3268,7 +3265,6 @@ Proof using Type.
   all: rewrite !Z.land_ones by lia; push_Zmod; pull_Zmod; f_equal; lia.
 
   Unshelve. all: shelve_unifiable.
-	(* cbn. repeat rewrite Z.land_same_r. autorewrite with zsimplify push_Zshift. clear.  cbn.  *)
 	
   all: fail_if_goals_remain ().
 (* Qed here hangs until the kernel crashes. Admitting until it can be sped up *)
