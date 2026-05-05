@@ -4666,16 +4666,6 @@ Fixpoint vector_shift_imm_aux {opts : symbolic_options_computed_opt} {descr : de
     vector_shift_imm_aux v shift_amt shift_op (S lane_idx) n lane_width new_acc
   end.
 
-Definition SymexVectorShiftImm {opts : symbolic_options_computed_opt} {descr : description}
-  {s : OperationSize} {sa : AddressSize}
-  (dst src imm : ARG) (shift_op : op) : M unit :=
-  let num_lanes := N.to_nat (s / 64)%N in
-  v <- GetOperand src;
-  imm_idx <- GetOperand imm;
-  zero <- App (const 0, []);
-  result <- vector_shift_imm_aux v imm_idx shift_op 0 num_lanes 64%N zero;
-  SetOperand dst result.
-
 (* vpunpcklqdq: interleave low qwords from each 128-bit half *)
 Fixpoint unpcklqdq_aux {opts : symbolic_options_computed_opt} {descr : description}
   (v1 v2 : idx) (half_idx num_remaining : nat) (acc : idx) : M idx :=
@@ -4742,7 +4732,7 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     v2 <- GetOperand src2;
     imm_val <- GetOperand imm;
     mask <- RevealConst imm_val;
-    let num_dwords := N.to_nat (s / 32)%N in
+		let num_dwords := N.to_nat (s / 32)%N in
     zero <- App (const 0, []);
     result <- SymbolicVector.blend_aux v1 v2 mask 0 num_dwords 32%N zero;
     SetOperand dst result
@@ -4750,16 +4740,26 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
   | vpmuludq, [dst; src1; src2] => (* multiply low 32 bits of each 64-bit lane *)
     let num_lanes := N.to_nat (s / 64)%N in
  		 v1 <- GetOperand src1;
-  	 v2 <- GetOperand src2;
-  	 zero <- App (const 0, []);
-  	 result <- muludq_aux v1 v2 0 num_lanes 64%N zero;
-  	 SetOperand dst result.
+		 v2 <- GetOperand src2;	
+		 zero <- App (const 0, []);
+		 result <- SymbolicVector.muludq_aux v1 v2 0 num_lanes 64%N zero;
+  	 SetOperand dst result
 
   | vpsrlq, [dst; src; imm] => (* shift right logical each 64-bit lane *)
-    SymbolicVector.SymexVectorShiftImm dst src imm (shr 64)
+		let num_lanes := N.to_nat (s / 64)%N in
+		v <- GetOperand src;
+		imm_idx <- GetOperand imm;
+		zero <- App (const 0, []);
+		result <- SymbolicVector.vector_shift_imm_aux v imm_idx (shr 64) 0 num_lanes 64%N zero;
+		SetOperand dst result
 
   | vpsllq, [dst; src; imm] => (* shift left logical each 64-bit lane *)
-    SymbolicVector.SymexVectorShiftImm dst src imm (shl 64)
+		let num_lanes := N.to_nat (s / 64)%N in
+		v <- GetOperand src;
+		imm_idx <- GetOperand imm;
+		zero <- App (const 0, []);
+		result <- SymbolicVector.vector_shift_imm_aux v imm_idx (shl 64) 0 num_lanes 64%N zero;
+		SetOperand dst result
 
   | vpunpcklqdq, [dst; src1; src2] =>
     v1 <- GetOperand src1;
@@ -4770,26 +4770,26 @@ Definition SymexNormalInstruction {opts : symbolic_options_computed_opt} {descr:
     SetOperand dst result
 
   | vpextrq, [dst; src; imm] =>
-    v <- GetOperand src;
+    v <- GetOperand (s:=128%N) src;
     imm_val <- GetOperand imm;
     lane <- RevealConst imm_val;
-    result <- App (slice (Z.to_N (lane * 64)) 64, [v]);
+    result <- App (slice (Z.to_N lane * 64)%N 64, [v]);
     SetOperand (s:=64%N) dst result
 
   | vextracti128, [dst; src; imm] =>
-    v <- GetOperand src;
+    v <- GetOperand (s:=256%N) src;
     imm_val <- GetOperand imm;
     half <- RevealConst imm_val;
-    result <- App (slice (Z.to_N (half * 128)) 128, [v]);
+    result <- App (slice (Z.to_N half * 128)%N 128, [v]);
     SetOperand (s:=128%N) dst result
 
   | vinserti128, [dst; src1; src2; imm] =>
-    v1 <- GetOperand src1;
+    v1 <- GetOperand (s:=256%N) src1;
     v2 <- GetOperand (s:=128%N) src2;
     imm_val <- GetOperand imm;
     half <- RevealConst imm_val;
-    result <- App (set_slice (Z.to_N (half * 128)) 128, [v1; v2]);
-    SetOperand dst result
+    result <- App (set_slice (Z.to_N half * 128)%N 128, [v1; v2]);
+    SetOperand (s:=256%N) dst result
 
 (* end vector instrs *) 
 
