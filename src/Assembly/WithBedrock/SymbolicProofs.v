@@ -2013,27 +2013,36 @@ Ltac step_SetReg :=
         | _ => idtac
         end
       end.
-
-Ltac normalize_NZ :=
-    repeat first [ rewrite N2Z.inj_mul in * | rewrite nat_N_Z in * | rewrite N2Z.id in * | rewrite Z2N.id in * by lia ].
-
-Ltac simplify_Z :=
-    repeat rewrite ?Z.lor_0_l, ?Z.lor_0_r,
-                   ?Z.land_0_l, ?Z.land_0_r,
-                   ?Z.lxor_0_l, ?Z.lxor_0_r,
-                   ?Z.shiftl_0_r, ?Z.shiftr_0_r,
-                   ?Z.shiftl_0_l, ?Z.shiftr_0_l,
-                   ?Z.ldiff_0_l, ?Z.ldiff_0_r,
-                   ?Z.add_0_l, ?Z.add_0_r,
-                   ?Z.mul_0_l, ?Z.mul_0_r,
-                   ?Z.mul_1_l, ?Z.mul_1_r
-                   in *.
-
+                   
+ Ltac normalize_NZ :=
+    repeat first
+      [ rewrite N2Z.inj_mul in *
+      | rewrite N2Z.inj_add in *
+      | rewrite nat_N_Z in *
+      | rewrite N2Z.id in *
+      | rewrite Z2N.id in * by lia
+      | rewrite Nat2Z.inj_mul in *
+      | rewrite Nat2Z.inj_add in *
+      | rewrite Nat2Z.inj_succ in *
+      | progress cbn [Z.of_N Pos.of_succ_nat] in *
+      | progress (rewrite ?Z.add_0_l, ?Z.add_0_r,
+                          ?Z.mul_0_l, ?Z.mul_0_r,
+                          ?Z.mul_1_l, ?Z.mul_1_r,
+                          ?Z.mul_succ_l, ?Z.mul_succ_r in *)
+      | progress (rewrite ?Z.lor_0_l, ?Z.lor_0_r,
+                          ?Z.land_0_l, ?Z.land_0_r,
+                          ?Z.lxor_0_l, ?Z.lxor_0_r,
+                          ?Z.ldiff_0_l, ?Z.ldiff_0_r,
+                          ?Z.shiftl_0_l, ?Z.shiftl_0_r,
+                          ?Z.shiftr_0_l, ?Z.shiftr_0_r in *)
+      | progress (rewrite ?Z.lor_assoc, ?Z.land_assoc in *)
+      | progress (rewrite ?Z.land_same_r, ?Z.land_diag, ?Z.lor_diag in *)
+      ].
+      
 Ltac cleanup :=
     repeat (first
       [ progress cbv [fst snd] in *
       | progress normalize_NZ
-      | progress simplify_Z
       | progress unfold ret in *
       | progress Option.inversion_option_step
       | progress inversion_ErrorT_step
@@ -2058,28 +2067,6 @@ Ltac solve_R_subgoals :=
     try solve_subsumed;
     try eassumption.
 
-	(* redefine all the tactics here *) 
-
- 
-  (* RevealConst succeeds iff the idx evaluates to a concrete constant.
-     State is unchanged, and the returned Z is the value. *)
-  Lemma RevealConst_R {opts : symbolic_options_computed_opt} {descr : description}
-    s m (HR : R s m)
-    (i : idx) (v : Z) (Hv : eval s i v)
-    z s'
-    (H : Symbolic.RevealConst i s = Success (z, s'))
-    : s' = s /\ v = z.
-  Proof using Type. Admitted.
-  (*   cbv [Symbolic.RevealConst Symbolic.Reveal Symbolic.bind Symbolic.ret Symbolic.err] in H. *)
-  (*   destruct (Symbolic.reveal s 1 i) eqn:Hrev; try (inversion H; fail). *)
-  (*   destruct n as [[] []]; inversion_ErrorT; Prod.inversion_prod; subst. *)
-  (*   split; [reflexivity|]. *)
-  (*   eapply Symbolic.eval_reveal in Hrev; [|exact Hv]. *)
-  (*   inversion Hrev; subst. clear Hrev. *)
-  (*   inversion H2; subst. *)
-  (*   cbn [Symbolic.interp_op] in H1. inversion H1. reflexivity. *)
-  (* Qed. *)
-	(* Set Ltac Debug. *)
   (* Extracts lane [lane_idx] of width [lane_width] from [v]. *)
   Lemma extract_lane_R {opts : symbolic_options_computed_opt} {descr : description}
     s m (HR : R s m)
@@ -2114,24 +2101,6 @@ Ltac solve_R_subgoals :=
     eapply extract_lane_R in HSl2 as (HR2 & Hsubs2 & Heval_lane2); try eassumption.
 		step_symex. solve_R_subgoals.
    	eauto. 
-  Qed.
-
-  Lemma insert_lane_ldiff_lor acc_val lane_val lane_width lane_idx :
-    lane_width > 0 ->
-    Z.shiftr acc_val (Z.of_nat lane_idx * lane_width) = 0 ->
-    Z.lor
-      (SemanticVector.insert_lane lane_val lane_idx lane_width)
-      (Z.ldiff acc_val
-        (Z.shiftl (Z.ones lane_width)
-        (Z.of_nat lane_idx * lane_width)))
-    = Z.lor acc_val (SemanticVector.insert_lane lane_val lane_idx lane_width).
-  Proof. intros. 
-    rewrite Z.lor_comm.
-    f_equal. bitblast.Z.bitblast. assert (Hbit : Z.testbit acc_val i = false).
-    { replace i with ((i - (Z.of_nat lane_idx * lane_width)) + (Z.of_nat lane_idx * lane_width)) by lia.
-      rewrite <- Z.shiftr_spec by lia.
-      rewrite H0. apply Z.bits_0. }
-    rewrite Hbit. reflexivity.
   Qed.
 
   (* Writes [lane_val] into lane [lane_idx] of accumulator [acc]. *)
@@ -2171,45 +2140,38 @@ Ltac solve_R_subgoals :=
   Proof. simpl SymbolicVector.vector_binop_aux in *. repeat step_symex.
     exists lane_val, new_acc, s0, s1. solve_R_subgoals.
   Qed.
-
-  Lemma acc_range_preserved : forall (acc_val lane_res lane_width : Z) (lane_idx : nat),
-    lane_width > 0 ->
-    Z.shiftr acc_val (Z.of_nat lane_idx * lane_width) = 0 ->
-    let new_acc_val := Z.lor
-        (Z.shiftl (Z.land lane_res (Z.ones lane_width)) (Z.of_nat lane_idx * lane_width))
-        (Z.ldiff acc_val (Z.shiftl (Z.ones lane_width) (Z.of_nat lane_idx * lane_width)))
-    in
-    Z.shiftr new_acc_val (Z.of_nat (S lane_idx) * lane_width) = 0.
-  Proof.
-      intros. 
-    apply Z.bits_inj_iff'; intros i Hi.
-    rewrite Z.shiftr_spec by lia.
-    rewrite Z.bits_0. subst new_acc_val.
-    rewrite Z.lor_spec.
-    (* Show both parts of the lor are 0 at position (S lane_idx) * lane_width + i *)
-    rewrite Z.shiftl_spec by lia.
-    rewrite Z.ldiff_spec.
-    (* The inserted lane occupies [lane_idx * lw, (lane_idx+1) * lw) *)
-    (* Position we're checking: (S lane_idx) * lw + i = (lane_idx + 1) * lw + i *)
-    (* This is >= (lane_idx + 1) * lw, so above the inserted lane *)
-    assert (Hins : Z.testbit (Z.land lane_res (Z.ones lane_width))
-                  (i + Z.of_nat (S lane_idx) * lane_width - Z.of_nat lane_idx * lane_width) = false).
-    { rewrite Z.land_spec, Z.testbit_ones_nonneg by lia.
-      destruct (_ <? _) eqn:E. 
-      apply Z.ltb_lt in E. lia. rewrite Bool.andb_false_r. reflexivity. }
-    rewrite Hins. 
-    (* Now show acc_val bit is 0 *)
-    assert (Hacc_bit : Z.testbit acc_val (Z.of_nat (S lane_idx) * lane_width + i) = false).
-    { 
-    set (lo := Z.of_nat lane_idx * lane_width) in *.
-    replace (Z.of_nat (S lane_idx) * lane_width + i) with (lane_width + i + lo) by (unfold lo; lia).
-    rewrite <- (Z.shiftr_spec acc_val lo (lane_width + i)) by lia.
-    rewrite H0, Z.bits_0. reflexivity.
-    }
-    rewrite Bool.orb_false_l.
-    replace (i + Z.of_nat (S lane_idx) * lane_width) with (Z.of_nat (S lane_idx) * lane_width + i) by lia.
-    rewrite Hacc_bit. reflexivity.
+  
+  Lemma set_slice_ldiff_lor acc_val lane_val lane_width base :
+      lane_width > 0 ->
+      Z.shiftr acc_val base = 0 ->
+      Z.lor (Z.shiftl (Z.land lane_val (Z.ones lane_width)) base)
+            (Z.ldiff acc_val (Z.shiftl (Z.ones lane_width) base))
+      = Z.lor acc_val (Z.shiftl (Z.land lane_val (Z.ones lane_width))
+  base).
+   Proof. intros. 
+    rewrite Z.lor_comm.
+    f_equal. bitblast.Z.bitblast. assert (Hbit : Z.testbit acc_val i = false).
+    { replace i with ((i - base) + base) by lia.
+      rewrite <- Z.shiftr_spec by lia.
+      rewrite H0. apply Z.bits_0. }
+    rewrite Hbit. reflexivity.
   Qed.
+  
+  (* Single insertion: writing a [lane_width]-bit value at lane [lane_idx]
+   preserves the invariant that bits at or above lane [lane_idx + 1] are zero. *)
+Lemma acc_range_preserved :
+  forall (acc lane_val lane_width base : Z),
+    lane_width > 0 ->
+    base >= 0 ->
+    Z.shiftr acc base = 0 ->
+    let acc'     := Z.lor (Z.shiftl (Z.land lane_val (Z.ones lane_width)) base)
+                          (Z.ldiff acc (Z.shiftl (Z.ones lane_width) base)) in
+    Z.shiftr acc' (base + lane_width) = 0.
+ Proof. 
+ intros. subst acc'. rewrite set_slice_ldiff_lor.  rewrite Z.shiftr_lor.
+ 				rewrite <- Z.shiftr_shiftr. rewrite H1.  bitblast.Z.bitblast.  all: lia.
+				Qed.
+				
 
   (* Iterates [num_remaining] lanes starting at [lane_idx], folding each into [acc]. *)
   Lemma vector_binop_aux_R {opts : symbolic_options_computed_opt} {descr : description}
@@ -2242,13 +2204,13 @@ Ltac solve_R_subgoals :=
       eapply IH in Hrest as (HR3 & Hsubs3 & Heval3); eauto; clear IH.
 
       (* Goal 2 first since you need it closed before discharging IH *)
-      2: { unfold SemanticVector.insert_lane.
-      apply acc_range_preserved; [lia | exact Hacc_hi]. }
+      2: { unfold SemanticVector.insert_lane. normalize_NZ.
+      apply acc_range_preserved; [lia|lia | exact Hacc_hi]. }
 
       (* Goal 1: combine subsumptions + massage Heval3 *)
       split; [exact HR3|].
-      split. solve_subsumed.
-      rewrite insert_lane_ldiff_lor in Heval3 by (lia || exact Hacc_hi).
+      split. solve_subsumed. unfold SemanticVector.insert_lane in Heval3.
+      rewrite set_slice_ldiff_lor in Heval3 by (lia || exact Hacc_hi).
       rewrite <- Z.lor_assoc in Heval3. apply Heval3.
     }
   Qed.
@@ -2297,7 +2259,12 @@ Ltac solve_R_subgoals :=
         = Success (res, s'))
     : R s' m /\ s :< s' /\
       eval s' res (SemanticVector.make_unary_lane v unaryop lane_idx (Z.of_N lane_width)).
-  Proof using Type. Admitted.
+  Proof using Type.
+    unfold SymbolicVector.make_unary_lane, SemanticVector.make_unary_lane in *.
+		repeat step_symex.
+    eapply extract_lane_R in HSl as (HR1 & Hsubs1 & Heval_lane); try eassumption.
+		step_symex. solve_R_subgoals.
+  Qed.
 
   Lemma vector_unaryop_aux_S_lane_idx
     {opts : symbolic_options_computed_opt} {descr : description}
@@ -2312,7 +2279,9 @@ Ltac solve_R_subgoals :=
           = Success (new_acc, s2)
     /\ SymbolicVector.vector_unaryop_aux i lane_op (S lane_idx) n lane_width
           new_acc s2 = Success (res, s').
-  Proof using Type. Admitted.
+  Proof. simpl SymbolicVector.vector_unaryop_aux in *. repeat step_symex.
+    exists lane_val, new_acc, s0, s1. solve_R_subgoals.
+  Qed.
 
   Lemma vector_unaryop_aux_R {opts : symbolic_options_computed_opt} {descr : description}
         s m (HR : R s m)
@@ -2332,7 +2301,26 @@ Ltac solve_R_subgoals :=
       eval s' res
         (Z.lor acc_val
           (SemanticVector.vector_unaryop_aux v unaryop lane_idx num_remaining (Z.of_N lane_width))).
-  Proof using Type. Admitted.
+  Proof using Type.
+    revert lane_idx s HR acc acc_val Hacc Hacc_hi res s' H Hv; induction num_remaining as [|n IH]; intros.
+    { cbv [SemanticVector.vector_unaryop_aux SymbolicVector.vector_unaryop_aux] in *.
+      rewrite Z.lor_0_r. inversion H. subst. eauto. }
+    {
+      destruct (vector_unaryop_aux_S_lane_idx _ _ _ _ _ _ _ _ _ H)
+        as (lane_val & new_acc & s1 & s2 & Hlane & Hins & Hrest).
+      eapply make_unary_lane_R in Hlane as (HR1 & Hsubs1 & Heval1); eauto.
+      eapply insert_lane_R in Hins as (HR2 & Hsubs2 & Heval2); eauto.
+      eapply IH in Hrest as (HR3 & Hsubs3 & Heval3); eauto; clear IH.
+
+      2: { unfold SemanticVector.insert_lane. normalize_NZ.
+      apply acc_range_preserved; [lia | lia| exact Hacc_hi]. }
+
+      split; [exact HR3|].
+      split. solve_subsumed. unfold SemanticVector.insert_lane in Heval3.
+      rewrite set_slice_ldiff_lor in Heval3 by (lia || exact Hacc_hi).
+      rewrite <- Z.lor_assoc in Heval3. apply Heval3.
+    }
+  Qed.
 
   Lemma SymexVectorUnaryOp_R {opts : symbolic_options_computed_opt} {descr : description}
     s m _tt s'
@@ -2347,7 +2335,20 @@ Ltac solve_R_subgoals :=
         SemanticVector.DenoteVectorUnaryOp sa s_op m dst src unaryop
           (N.to_nat (s_op / lane_width)%N) (Z.of_N lane_width) = Some m'
         /\ R s' m' /\ s :< s'.
-  Proof using Type. Admitted.
+  Proof using Type.
+    cbv [SymbolicVector.SymexVectorUnaryOp] in H. repeat step_symex. cbv [fst snd] in *.
+    rename v into i1, HSv into Hget1.
+    eapply (GetOperand_R s m) in Hget1 as (HR0 & Hsubs0 & Heval1); eauto.
+    destruct Heval1 as (v1 & Heval1 & Hdenote1).
+    eapply App_R in HSacc as (HR2 & Hsubs2 & Heval_acc); try eauto. 2: repeat econstructor.
+    eapply vector_unaryop_aux_R in HSresult as (HR3 & Hsubs3 & Heval_res); eauto. rewrite Z.lor_0_l in Heval_res.
+    step_SetOperand.
+    eexists. split; [|split].
+    { cbv [SemanticVector.DenoteVectorUnaryOp Crypto.Util.Option.bind].
+      rewrite Hdenote1. exact Hm0. }
+    { exact Hs'. }
+    { solve_subsumed. }
+  Qed.
 
   (* === Broadcast lemmas === *)
 
@@ -2377,12 +2378,9 @@ Ltac solve_R_subgoals :=
 			eapply IH in H as (HR1 & Hsub1 & Heval1); eauto.
 			{ solve_R_subgoals.
 			simpl SemanticVector.broadcast_aux.
-			change (Z.shiftl (Z.land lane_val (Z.ones (Z.of_N lane_width))) (Z.of_nat lane_idx *
-   Z.of_N lane_width))
-    with (SemanticVector.insert_lane lane_val lane_idx (Z.of_N lane_width)) in Heval1.
-		 rewrite insert_lane_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
+		 rewrite set_slice_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
 			rewrite Z.lor_assoc. assumption. }
-			{ eapply acc_range_preserved; [lia | exact Hacc_hi]. }
+			{ normalize_NZ. eapply acc_range_preserved; [lia| lia | exact Hacc_hi]. }
 			}
 	Qed.
 			
@@ -2406,7 +2404,6 @@ Lemma blend_aux_R {opts : symbolic_options_computed_opt} {descr : description}
             (SemanticVector.blend_aux v1 v2 mask lane_idx num_remaining (Z.of_N
   lane_width))).
     Proof using Type.
-
 			revert lane_idx s HR acc acc_val Hacc Hacc_hi res s' H Hv1 Hv2;
   induction num_remaining as [|n IH]; intros.
   { simpl in *. repeat cleanup. subst. solve_R_subgoals. }
@@ -2414,32 +2411,13 @@ Lemma blend_aux_R {opts : symbolic_options_computed_opt} {descr : description}
     simpl in H. destruct (Z.testbit mask (Z.of_nat lane_idx)) eqn:Htestbit;
     repeat step_symex;
 		
-    eapply IH in H as (HR1 & Hsub1 & Heval1); eauto; [|eapply acc_range_preserved; [lia | exact Hacc_hi]| |eapply acc_range_preserved; [lia | exact Hacc_hi]].
-		{
-		change (Z.shiftl
-            (Z.land (Z.land (Z.shiftr v2 (Z.of_nat lane_idx * Z.of_N lane_width)) (Z.ones (Z.of_N lane_width))) (Z.ones (Z.of_N lane_width)))
-            (Z.of_nat lane_idx * Z.of_N lane_width))
-    with (SemanticVector.insert_lane (Z.land (Z.shiftr v2 (Z.of_nat lane_idx * Z.of_N lane_width)) (Z.ones (Z.of_N lane_width))) lane_idx
-             (Z.of_N lane_width)) in Heval1.
+    eapply IH in H as (HR1 & Hsub1 & Heval1); eauto; normalize_NZ; [|eapply acc_range_preserved; [lia|lia | exact Hacc_hi]| |eapply acc_range_preserved;  [lia|lia | exact Hacc_hi]];
+		 rewrite set_slice_ldiff_lor in Heval1 by (lia || exact Hacc_hi);    
+    simpl SemanticVector.blend_aux; rewrite Htestbit;
+		unfold SemanticVector.extract_lane; unfold SemanticVector.insert_lane;
+    normalize_NZ;
     solve_R_subgoals.
-    simpl SemanticVector.blend_aux; rewrite Htestbit.
-		unfold SemanticVector.extract_lane.
-    rewrite insert_lane_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
-    rewrite Z.lor_assoc. assumption.
-		}
-		{
-				change (Z.shiftl
-            (Z.land (Z.land (Z.shiftr v1 (Z.of_nat lane_idx * Z.of_N lane_width)) (Z.ones (Z.of_N lane_width))) (Z.ones (Z.of_N lane_width)))
-            (Z.of_nat lane_idx * Z.of_N lane_width))
-    with (SemanticVector.insert_lane (Z.land (Z.shiftr v1 (Z.of_nat lane_idx * Z.of_N lane_width)) (Z.ones (Z.of_N lane_width))) lane_idx
-             (Z.of_N lane_width)) in Heval1.
-    solve_R_subgoals.
-    simpl SemanticVector.blend_aux; rewrite Htestbit.
-		unfold SemanticVector.extract_lane.
-    rewrite insert_lane_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
-    rewrite Z.lor_assoc. assumption.
-		}
-  }
+    }
   Qed.
 				
 
@@ -2551,18 +2529,12 @@ Qed.
     simpl in H. repeat step_symex.
 		eapply make_muludq_lane_R in HSlane_val as (HR0 & Hsubs & Heval); eauto.
 		repeat step_symex.
-		eapply IH in H as (HR1 & Hsub1 & Heval1);
-    [| exact Hs1 | exact Hnew_acc | eapply acc_range_preserved; [lia | exact Hacc_hi] | eauto | eauto].
+		eapply IH in H as (HR1 & Hsub1 & Heval1); eauto; normalize_NZ;
+    [| eapply acc_range_preserved; [lia|lia | exact Hacc_hi]].
     simpl SemanticVector.muludq_aux in *.
-		
-  change (Z.shiftl (Z.land (Z.land (Z.shiftr v1 _) (Z.ones 32) * Z.land (Z.shiftr v2 _) (Z.ones
-   32)) (Z.ones (Z.of_N 64))) (Z.of_nat lane_idx * Z.of_N 64))
-    with (SemanticVector.insert_lane (Z.land (Z.shiftr v1 (Z.of_nat lane_idx * Z.of_N 64))
-  (Z.ones 32) * Z.land (Z.shiftr v2 (Z.of_nat lane_idx * Z.of_N 64)) (Z.ones 32)) lane_idx
-  (Z.of_N 64)) in Heval1.
-		rewrite insert_lane_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
-  rewrite <- Z.lor_assoc in Heval1.
+		rewrite set_slice_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
 	unfold SemanticVector.insert_lane in Heval1. rewrite land_ones_mul_32_64 in Heval1.
+	normalize_NZ.
     solve_R_subgoals. 
   }
   Qed.
@@ -2586,8 +2558,21 @@ Qed.
           (Z.lor acc_val
             (SemanticVector.vector_unaryop_aux v (fun lane => binop lane shift_amt)
               lane_idx num_remaining (Z.of_N lane_width))).
-    Proof using Type. Admitted.
-    
+    Proof using Type. 
+    			revert lane_idx s HR acc acc_val Hacc Hacc_hi res s' H Hv Hshift.
+    			induction num_remaining as [|n IH]; intros.
+    			{ simpl in *. cleanup. subst. solve_R_subgoals. }
+    			{	simpl in H. repeat step_symex.
+        eapply IH in H as (HR1 & Hsub1 & Heval1); eauto; normalize_NZ;
+          [| eapply acc_range_preserved; [lia |lia| exact Hacc_hi]].
+        rewrite set_slice_ldiff_lor in Heval1 by (lia || exact Hacc_hi).
+        simpl SemanticVector.vector_unaryop_aux.
+        unfold SemanticVector.make_unary_lane, SemanticVector.extract_lane.        
+        normalize_NZ.
+        solve_R_subgoals.
+      }
+    Qed.
+    			
    Lemma unpcklqdq_aux_R {opts : symbolic_options_computed_opt} {descr : description}
           s m (HR : R s m)
           (i1 i2 : idx) (v1 v2 : Z)
@@ -2602,8 +2587,21 @@ Qed.
         eval s' res
           (Z.lor acc_val
             (SemanticVector.unpcklqdq_aux v1 v2 half_idx num_remaining)).
-    Proof using Type. Admitted.
-
+    Proof using Type.
+    revert half_idx s HR acc acc_val Hacc Hacc_hi res s' H Hv1 Hv2;
+    induction num_remaining as [|n IH]; intros.
+    { simpl in *. cleanup. subst. solve_R_subgoals. }
+    {
+      simpl in H. repeat step_symex.
+      eapply IH in H as (HR1 & Hsub1 & Heval1); eauto; normalize_NZ; change 128 with (64 + 64).
+      2: {
+      replace (Z.of_nat half_idx * (64 + 64) + (64 + 64)) with ((Z.of_nat half_idx * (64 + 64) + 64) + 64) by lia.
+        do 2 (eapply acc_range_preserved; try lia). assumption. }
+      simpl SemanticVector.unpcklqdq_aux. normalize_NZ.
+      do 2 (erewrite set_slice_ldiff_lor in Heval1; eauto; try lia). normalize_NZ.
+			 solve_R_subgoals. all: (eapply acc_range_preserved; lia).
+    }
+  Qed.
 
   Lemma interprets_as_add s : interprets_as_binop (add s) (fun a b => Z.land (a + b) (Z.ones (Z.of_N s))).
     Proof. intros a b. cbn [interp_op fold_right]. rewrite Z.add_0_r. reflexivity. Qed.
