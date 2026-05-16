@@ -401,6 +401,10 @@ Lemma unfold_bind {A B} ma amb s :
   @bind A B ma amb s = ltac:(let t := eval unfold bind, ErrorT.bind in ( @bind A B ma amb s) in exact t).
 Proof using Type. exact eq_refl. Qed.
 
+Lemma unfold_some_or {A} x y :
+  @some_or A x y = ltac:(let t := eval unfold some_or in (@some_or A x y) in exact t).
+Proof using Type. exact eq_refl. Qed.
+
 Local Hint Resolve gensym_dag_ok_of_R : core.
 
 Ltac step_symex0 :=
@@ -2927,7 +2931,7 @@ Ltac step :=
   first
   [ lift_let_goal
   | resolve_match_using_hyp
-  | progress (cbn beta iota delta [fst snd Syntax.op Syntax.args] in *; cbv beta iota delta [Reveal RevealConst Crypto.Util.Option.bind Symbolic.ret Symbolic.err Symeval mapM PreserveFlag some_or] in *; subst)
+  | progress (cbn beta iota delta [fst snd Syntax.op Syntax.args] in *; repeat rewrite unfold_some_or in *; cbv beta iota delta [Reveal RevealConst Crypto.Util.Option.bind Symbolic.ret Symbolic.err Symeval mapM PreserveFlag] in *; repeat rewrite unfold_some_or in *; subst)
   | Prod.inversion_prod_step
   | inversion_ErrorT_step
   | Option.inversion_option_step
